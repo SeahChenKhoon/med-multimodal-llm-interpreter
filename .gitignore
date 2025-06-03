@@ -6,6 +6,10 @@ credentials/*key*.json
 **/*credentials*.json
 **/*key*.json
 
+# Ignore all files start with dot
+.*
+!.gitignore
+
 # Python
 __pycache__/
 *.py[cod]
