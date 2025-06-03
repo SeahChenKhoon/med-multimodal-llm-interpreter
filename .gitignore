@@ -21,6 +21,7 @@ venv/
 
 # data 
 data/*
+temp_data/*
 
 # poetry
 poetry.lock
