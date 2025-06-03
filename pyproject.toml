@@ -7,7 +7,7 @@ authors = [
 ]
 license = {text = "To be determined"}
 readme = "README.md"
-requires-python = "^3.12"
+requires-python = ">=3.12"
 dependencies = [
     "openai (>=1.83.0,<2.0.0)",
     "litellm (>=1.72.0,<2.0.0)"
