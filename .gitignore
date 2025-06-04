@@ -28,13 +28,11 @@ poetry.lock
 
 
 !.github/
-# evaluations
-evaluations/*
-!evaluations/ragas_reports/.gitkeep
 
 
 # Keep all .gitkeep files
 !.gitkeep
+
 
 # Ignore .deb packages
 *.deb
