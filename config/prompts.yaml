@@ -1,0 +1,14 @@
+prompts:
+  medical_image_agent: |
+    You an expert medical report analyser. Your task is to check if the medical
+    report contains any medical medical_image_prompts
+    
+    Analyze all pages of this medical report and determine if it contains medical images such as:
+        - X-rays, CT scans, MRI images
+        - Ultrasound images  
+        - Pathology slides or microscopic images
+        - Medical charts, graphs, or diagnostic plots
+        - Anatomical diagrams or illustrations
+        - Any visual diagnostic content beyond plain text
+        
+        For each page that contains medical images, provide captions describing what you see.
