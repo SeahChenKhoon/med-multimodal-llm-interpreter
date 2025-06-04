@@ -1,14 +1,21 @@
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Type, TypeVar
 from openai import OpenAI, AzureOpenAI
 import litellm
+from litellm import acompletion
+import instructor
+from pydantic import BaseModel
+
+
+T = TypeVar('T', bound=BaseModel)
+
 
 class LLMClient:
     def __init__(
         self,
         provider: str = None,
-        api_key: str = None,        
-        model: str  = None,
-        messages: list =[],
+        api_key: str = None,
+        model: str = None,
+        messages: list = [],
         extra_params=None
     ):
         self.provider = provider
@@ -16,8 +23,10 @@ class LLMClient:
         self.api_key = api_key
         self.messages = messages
         self.extra_params = extra_params
+        self.instructor_client = instructor.from_litellm(litellm.acompletion)
+
     def completion(self):
-        response=""
+        response = ""
         kwargs = {
             "model": self.model,
             "messages": self.messages,
@@ -27,6 +36,38 @@ class LLMClient:
             kwargs.update(self.extra_params)
         response = litellm.completion(**kwargs)
         return _strip_markdown_fences(response['choices'][0]['message']['content'])
+
+    def structured_completion(
+        self, response_model: Type[T], temperature: float = 0.3
+    ) -> T:
+        """New method for structured responses using instructor"""
+        kwargs = {
+            "model": self.model,
+            "messages": self.messages,
+            "api_key": self.api_key,
+            "response_model": response_model,
+            "temperature": temperature
+        }
+        if self.extra_params:
+            kwargs.update(self.extra_params)
+        
+        return self.instructor_client.chat.completions.create(**kwargs)
+    
+    async def async_structured_completion(
+        self, response_model: Type[T], temperature: float = 0.3
+    ) -> T:
+        """Async method for structured responses using instructor"""
+        kwargs = {
+            "model": self.model,
+            "messages": self.messages,
+            "api_key": self.api_key,
+            "response_model": response_model,
+            "temperature": temperature
+        }
+        if self.extra_params:
+            kwargs.update(self.extra_params)
+        
+        return await self.instructor_client.chat.completions.create(**kwargs)
     
 
 def _strip_markdown_fences(text: str) -> str:
@@ -37,7 +78,6 @@ def _strip_markdown_fences(text: str) -> str:
         if line.strip().startswith("```"):
             continue  # Skip the fence line
         cleaned_lines.append(line)
-
 
     return "\n".join(cleaned_lines)
 
