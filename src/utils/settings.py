@@ -24,4 +24,5 @@ class Settings(BaseSettings):
 
     LLM_TEMPERATURE: float
 
+
 SETTINGS = Settings()
