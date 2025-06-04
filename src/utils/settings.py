@@ -13,8 +13,15 @@ class Settings(BaseSettings):
         "case_sensitive": True,
     }
     CONFIG_DIR: str = "../../config"
-
+    LLM_PROVIDER: str
+    LLM_MODEL: str
     OPENAI_API_KEY: str
 
+    AZURE_OPENAI_API_KEY: str
+    AZURE_OPENAI_ENDPOINT: str
+    AZURE_OPENAI_DEPLOYMENT: str
+    AZURE_API_VERSION: str
+
+    LLM_TEMPERATURE: float
 
 SETTINGS = Settings()
