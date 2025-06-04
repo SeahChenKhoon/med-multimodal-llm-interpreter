@@ -4,12 +4,12 @@ disable_existing_loggers: False
 formatters:
   json:
     format: "%(asctime)s %(process)d %(name)s %(levelname)s %(message)s"
-    class: src.backend.utils.logging.UnicodeJsonFormatter
+    class: src.utils.logging.UnicodeJsonFormatter
     # class: pythonjsonlogger.jsonlogger.JsonFormatter
     datefmt: "%Y-%m-%dT%H:%M:%S%z"
     charset: utf8
   pretty_json:
-    class: src.backend.utils.logging.PrettyJSONFormatter
+    class: src.utils.logging.PrettyJSONFormatter
     format: "%(asctime)s %(process)d %(name)s %(levelname)s %(message)s %(json_data)s"
     datefmt: "%Y-%m-%dT%H:%M:%S%z"
     charset: utf8
