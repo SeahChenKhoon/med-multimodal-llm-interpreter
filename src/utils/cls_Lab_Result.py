@@ -4,13 +4,15 @@ from typing import Optional
 class cls_Lab_Result:
     def __init__(
         self,
-        test_datetime: Optional[str] = None,
+        test_filename: Optional[str] = None,
+        test_datetime: Optional[datetime] = None,
         test_name: Optional[str] = None,
         test_result: Optional[float] = None,
         test_uom: Optional[str] = None,
         ref_range: Optional[str] = None,
         diagnostic: Optional[str] = None,
     ):
+        self.test_filename = test_filename
         self.test_datetime = test_datetime
         self.test_name = test_name
         self.test_result = test_result
@@ -19,9 +21,11 @@ class cls_Lab_Result:
         self.diagnostic = diagnostic
 
     @classmethod
-    def from_dict(cls, data: dict) -> "cls_Lab_Result":
+    def from_dict(cls, data: dict, filename:Optional[str]=None,
+                  test_datetime: Optional[str] = None) -> "cls_Lab_Result":
         return cls(
-            test_datetime=data.get("datetime"),
+            test_filename= filename,
+            test_datetime= test_datetime or data.get("datetime"),
             test_name=data.get("test_name"),
             test_result=data.get("test_result"),
             test_uom=data.get("test_uom"),
