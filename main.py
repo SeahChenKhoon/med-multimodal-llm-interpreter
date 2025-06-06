@@ -1,13 +1,15 @@
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from pathlib import Path
 from pypdf import PdfReader
 import json
 import csv
+import re
 from src.utils.settings import SETTINGS 
 import src.utils.cls_LLM as cls_LLM
+from datetime import datetime
 from src.utils.cls_Lab_Result import cls_Lab_Result
 
-llm_prompt_template = """
+extract_lab_tests_prompt_template = """
 You are an information extraction assistant. Extract the following fields from a medical lab test document:
 
 - datetime: The exact date and time the test was performed or reported.
@@ -18,7 +20,7 @@ You are an information extraction assistant. Extract the following fields from a
 - diagnostic: Any medical interpretation or comment, if available.
 
 Here is the text to process:
-{text}
+{lab_result}
 
 Return the results as a list of JSON objects, one per test, in this format:
 [
@@ -32,6 +34,23 @@ Return the results as a list of JSON objects, one per test, in this format:
     }},
     ...
 ]
+No Markdown formatting, explanations, or docstrings. Do NOT wrap your output in backticks.
+"""
+
+prompt = """
+    You are a medical data analyst.
+
+    Your task:
+    1. Group lab test names that are functionally or clinically equivalent.
+    2. Assign a single standardized name to each group (e.g., "Glucose, Fasting").
+    3. For each standardized name, list all test name variants.
+    4. Return the result as a table with the following columns:
+    - Standard Name
+    - Variant Names (semicolon-separated)
+    - Notes (optional)
+
+    Test names:
+    {joined_tests}
 """
 
 def _get_data_files(directory: str) -> List[Path]:
@@ -98,11 +117,12 @@ def export_lab_results_to_csv(lab_results: List["cls_Lab_Result"], output_path: 
         writer = csv.writer(csvfile)
 
         # Header
-        writer.writerow(["datetime", "test_name", "test_result", "test_uom", "ref_range", "diagnostic"])
+        writer.writerow(["filename", "datetime", "test_name", "test_result", "test_uom", "ref_range", "diagnostic"])
 
         # Rows
         for result in lab_results:
             writer.writerow([
+                result.test_filename,
                 result.test_datetime,
                 result.test_name,
                 result.test_result,
@@ -110,6 +130,30 @@ def export_lab_results_to_csv(lab_results: List["cls_Lab_Result"], output_path: 
                 f"'{result.ref_range}" if result.ref_range else "",
                 result.diagnostic
             ])
+
+def extract_test_datetime(text: str) -> Optional[str]:
+    """Extracts the test datetime from PDF content like 'Date: 01 Oct 2022, 08:46 AM'."""
+    match = re.search(r"Date:\s*(\d{2} \w{3} \d{4}, \d{2}:\d{2} [AP]M)", text)
+    return match.group(1) if match else None
+
+def clean_pdf_text(text: str) -> str:
+    """Removes known footer lines from extracted PDF text."""
+    lines = text.splitlines()
+    return "\n".join(
+        line for line in lines
+        if not re.search(r"Generated on:\s*\d{2} \w{3} \d{4}", line)
+    )
+
+def get_datetime_object(test_datetime) -> Optional[datetime]:
+    """Converts the test_datetime string into a datetime object if possible."""
+    try:
+        return datetime.strptime(test_datetime, "%d %b %Y, %I:%M %p")
+    except (TypeError, ValueError):
+        return None
+
+def get_joined_test_names(lab_results: List[cls_Lab_Result]) -> str:
+    test_names = sorted({result.test_name.strip() for result in lab_results})
+    return "\n".join(test_names)
 
 
 def main() -> None:
@@ -126,7 +170,7 @@ def main() -> None:
     Raises:
         Any unhandled exceptions during file reading, LLM processing, or JSON parsing.
     """
-    data_storage_folder = "data/raw"
+    data_storage_folder = "data\\selected_data"
 
 
     settings_dict = build_settings_dict()
@@ -134,25 +178,32 @@ def main() -> None:
     lab_results: List[cls_Lab_Result] = []
 
     data_files = _get_data_files(data_storage_folder)
+    
     for data_file in data_files:
         print(f"Processing file: {data_file}")
         pdf_content = extract_pdf_text(data_file)
+        cleaned_text = clean_pdf_text(pdf_content)
 
-        prompt = llm_prompt_template.format(text=pdf_content.strip())
+        test_datetime = extract_test_datetime(cleaned_text)
+        test_datetime = get_datetime_object(test_datetime)
+        prompt = extract_lab_tests_prompt_template.format(lab_result=cleaned_text.strip())
         llm_client = cls_LLM.build_llm_client(settings_dict, prompt)
         response = llm_client.completion()
-
         if not response.strip():
             print(f"Empty response for {data_file.name}")
             continue
 
         try:
             data = json.loads(response)
-            lab_results.extend(cls_Lab_Result.from_dict(item) for item in data)
+
+            lab_results.extend(cls_Lab_Result.from_dict(item, data_file.name,test_datetime=test_datetime) 
+                               for item in data)
+
         except json.JSONDecodeError as e:
             print(f"JSON decode error in {data_file.name}: {e}\nResponse: {response}")
             continue
-
+    # lab_test_names = list({result.test_name.strip() for result in lab_results})
+    # response = llm.create_client(prompt)
     export_lab_results_to_csv(lab_results, "data\\output\\lab_results_output.csv")
 
 
