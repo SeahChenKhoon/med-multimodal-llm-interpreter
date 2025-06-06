@@ -69,7 +69,34 @@ class LLMClient:
         
         return await self.instructor_client.chat.completions.create(**kwargs)
     
+class LLMWrapper:
+    def __init__(self, settings_dict: dict):
+        provider = settings_dict["provider"].lower()
+        self.provider = provider
+        self.model = settings_dict["llm_model"]
+        self.api_key = (
+            settings_dict["azure_openai_api_key"]
+            if provider == "azure"
+            else settings_dict["openai_api_key"]
+        )
+        self.extra_params = (
+            {
+                "api_base": settings_dict["azure_openai_endpoint"],
+                "deployment_id": settings_dict["azure_openai_deployment"],
+            }
+            if provider == "azure"
+            else {}
+        )
 
+    def create_client(self, prompt: str) -> LLMClient:
+        return LLMClient(
+            provider=self.provider,
+            model=self.model,
+            api_key=self.api_key,
+            messages=[{"role": "user", "content": prompt}],
+            extra_params=self.extra_params,
+        )
+    
 def _strip_markdown_fences(text: str) -> str:
     lines = text.strip().splitlines()
     cleaned_lines = []
@@ -104,4 +131,3 @@ def build_llm_client(settings_dict: dict, prompt: str) -> LLMClient:
             messages=[{"role": "user", "content": prompt}]
         )
 
-    
