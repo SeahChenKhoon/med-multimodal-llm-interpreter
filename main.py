@@ -1,4 +1,4 @@
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 from pathlib import Path
 from pypdf import PdfReader
 import json
@@ -37,7 +37,7 @@ Return the results as a list of JSON objects, one per test, in this format:
 No Markdown formatting, explanations, or docstrings. Do NOT wrap your output in backticks.
 """
 
-prompt = """
+lab_test_name_grouping_prompt_template  = """
     You are a medical data analyst.
 
     Your task:
@@ -47,10 +47,11 @@ prompt = """
     4. Return the result as a table with the following columns:
     - Standard Name
     - Variant Names (semicolon-separated)
-    - Notes (optional)
 
     Test names:
     {joined_tests}
+
+    No Markdown formatting, explanations, or docstrings. Do NOT wrap your output in backticks.
 """
 
 def _get_data_files(directory: str) -> List[Path]:
@@ -155,22 +156,121 @@ def get_joined_test_names(lab_results: List[cls_Lab_Result]) -> str:
     test_names = sorted({result.test_name.strip() for result in lab_results})
     return "\n".join(test_names)
 
+def extract_lab_results_from_pdf(data_file, settings_dict) -> Tuple[List[Dict], "datetime"]:
+    """
+    Extracts structured lab result data and test datetime from a PDF using an LLM.
+
+    Args:
+        data_file: A file-like object representing the PDF file.
+        settings_dict: Dictionary containing LLM client configuration.
+
+    Returns:
+        Tuple[List[Dict], datetime]: A list of extracted lab result dictionaries and the test datetime.
+    """
+    # Extract and clean text from PDF
+    pdf_content = extract_pdf_text(data_file)
+    cleaned_text = clean_pdf_text(pdf_content)
+
+    # Extract and convert test datetime
+    test_datetime_str = extract_test_datetime(cleaned_text)
+    test_datetime = get_datetime_object(test_datetime_str)
+
+    # Prepare and send prompt to LLM
+    prompt = extract_lab_tests_prompt_template.format(lab_result=cleaned_text.strip())
+    llm_client = cls_LLM.build_llm_client(settings_dict, prompt)
+    response = llm_client.completion()
+
+    # Parse LLM response
+    try:
+        data = json.loads(response)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Failed to parse LLM response as JSON: {e}")
+
+    return data, test_datetime
+
+def extract_lab_results_from_pdf(data_file, settings_dict) -> Tuple[List[Dict], "datetime"]:
+    """
+    Extracts structured lab result data and test datetime from a PDF using an LLM.
+
+    Args:
+        data_file: A file-like object representing the PDF file.
+        settings_dict: Dictionary containing LLM client configuration.
+
+    Returns:
+        Tuple[List[Dict], datetime]: A list of extracted lab result dictionaries and the test datetime.
+    """
+    # Extract and clean text from PDF
+    pdf_content = extract_pdf_text(data_file)
+    cleaned_text = clean_pdf_text(pdf_content)
+
+    # Extract and convert test datetime
+    test_datetime_str = extract_test_datetime(cleaned_text)
+    test_datetime = get_datetime_object(test_datetime_str)
+
+    # Prepare and send prompt to LLM
+    prompt = extract_lab_tests_prompt_template.format(lab_result=cleaned_text.strip())
+    llm_client = cls_LLM.build_llm_client(settings_dict, prompt)
+    response = llm_client.completion()
+
+    # Parse LLM response
+    try:
+        data = json.loads(response)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Failed to parse LLM response as JSON: {e}")
+
+    return data, test_datetime
+
+def standardize_test_names(lab_results: List[cls_Lab_Result], standardization_map):
+    for result in lab_results:
+        if result.test_name:
+            normalized_name = result.test_name.strip().lower()
+            if normalized_name in standardization_map:
+                result.test_name = standardization_map[normalized_name]
+    return lab_results
+
+
+def standardize_lab_result_names_with_llm(
+    lab_results: List["cls_Lab_Result"],
+    settings_dict: dict
+) -> List["cls_Lab_Result"]:
+    """
+    Uses an LLM to generate a standardization map for lab test names and applies it
+    to the provided list of cls_Lab_Result objects.
+
+    Args:
+        lab_results: List of cls_Lab_Result objects.
+        settings_dict: Dictionary with LLM configuration.
+
+    Returns:
+        Updated list of cls_Lab_Result with standardized test_name fields.
+    """
+    # Prepare joined test names and prompt
+    joined_tests = get_joined_test_names(lab_results)
+    prompt = lab_test_name_grouping_prompt_template.format(joined_tests=joined_tests)
+
+    # Send prompt to LLM
+    llm_client = cls_LLM.build_llm_client(settings_dict, prompt)
+    response = llm_client.completion()
+
+    # Parse LLM table output into a mapping
+    standardization_map: Dict[str, str] = {}
+
+    for line in response.strip().split("\n"):
+        if "|" not in line:
+            continue
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) != 2:
+            continue
+        standard_name, variants = parts
+        for variant in variants.split(";"):
+            normalized_variant = variant.strip().lower()
+            standardization_map[normalized_variant] = standard_name
+
+    # Apply standardization
+    return standardize_test_names(lab_results, standardization_map)
 
 def main() -> None:
-    """
-    Process PDF lab reports in a given folder using an LLM to extract structured lab results.
-
-    Steps:
-    - Load all PDF files from the target folder.
-    - Extract text content from each PDF.
-    - Format the content into an LLM prompt and retrieve structured JSON response.
-    - Parse and accumulate lab results into a list of cls_Lab_Result objects.
-    - Print each test name with its parsed datetime.
-
-    Raises:
-        Any unhandled exceptions during file reading, LLM processing, or JSON parsing.
-    """
-    data_storage_folder = "data\\selected_data"
+    data_storage_folder = "data\\all_data"
 
 
     settings_dict = build_settings_dict()
@@ -181,29 +281,12 @@ def main() -> None:
     
     for data_file in data_files:
         print(f"Processing file: {data_file}")
-        pdf_content = extract_pdf_text(data_file)
-        cleaned_text = clean_pdf_text(pdf_content)
+        data, test_datetime = extract_lab_results_from_pdf(data_file, settings_dict)
+        lab_results.extend(cls_Lab_Result.from_dict(item, data_file.name,test_datetime=test_datetime) 
+                            for item in data)
 
-        test_datetime = extract_test_datetime(cleaned_text)
-        test_datetime = get_datetime_object(test_datetime)
-        prompt = extract_lab_tests_prompt_template.format(lab_result=cleaned_text.strip())
-        llm_client = cls_LLM.build_llm_client(settings_dict, prompt)
-        response = llm_client.completion()
-        if not response.strip():
-            print(f"Empty response for {data_file.name}")
-            continue
-
-        try:
-            data = json.loads(response)
-
-            lab_results.extend(cls_Lab_Result.from_dict(item, data_file.name,test_datetime=test_datetime) 
-                               for item in data)
-
-        except json.JSONDecodeError as e:
-            print(f"JSON decode error in {data_file.name}: {e}\nResponse: {response}")
-            continue
-    # lab_test_names = list({result.test_name.strip() for result in lab_results})
-    # response = llm.create_client(prompt)
+    lab_results = standardize_lab_result_names_with_llm(lab_results, settings_dict)
+    
     export_lab_results_to_csv(lab_results, "data\\output\\lab_results_output.csv")
 
 
