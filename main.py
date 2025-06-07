@@ -4,37 +4,36 @@ from pypdf import PdfReader
 import json
 import csv
 import re
+import sqlite3
 from src.utils.settings import SETTINGS 
 import src.utils.cls_LLM as cls_LLM
-from datetime import datetime
+from datetime import date, datetime
 from src.utils.cls_Lab_Result import cls_Lab_Result
 
-extract_lab_tests_prompt_template = """
-You are an information extraction assistant. Extract the following fields from a medical lab test document:
+extract_and_classify_lab_tests_prompt_template = """
+You are a medical assistant AI. Given a medical lab test document, extract the following fields from the text:
 
 - datetime: The exact date and time the test was performed or reported.
 - test_name: The name of the medical test performed (e.g., "ALBUMIN, U (NHGD)").
 - test_result: The measured value (e.g., "24.0").
-- test_uom: The measured unit (e.g., mg/L)
-- ref_range: The reference range if provided. It is usually a numeric range like "10-50", "0.0-2.5", or ">=5.0". Do NOT interpret it as a date.
-- diagnostic: Any medical interpretation or comment, if available.
+- test_uom: The measured unit (e.g., mg/L).
 
-Here is the text to process:
+**Input text:**
 {lab_result}
 
-Return the results as a list of JSON objects, one per test, in this format:
+**Expected Output:**
+A list of JSON objects. One per test. Each object must follow this structure:
 [
     {{
-    "datetime": "...",
-    "test_name": "...",
-    "test_result": "...",
-    "test_uom": "...",
-    "ref_range": "...",
-    "diagnostic": "..."
+        "datetime": "...",
+        "test_name": "...",
+        "test_result": "...",
+        "test_uom": "..."
     }},
     ...
 ]
-No Markdown formatting, explanations, or docstrings. Do NOT wrap your output in backticks.
+
+Do NOT include Markdown formatting, explanations, or wrap the output in backticks.
 """
 
 lab_test_name_grouping_prompt_template  = """
@@ -54,6 +53,34 @@ lab_test_name_grouping_prompt_template  = """
     No Markdown formatting, explanations, or docstrings. Do NOT wrap your output in backticks.
 """
 
+lab_result_classification_prompt = """
+You are a medical assistant AI. Interpret the following lab test results and classify whether each test is normal, high, or low.
+
+For each test, provide:
+1. "classification": "normal", "high", or "low"
+2. "reason": Brief explanation for the classification. If no reference range is given, use medically accepted typical ranges or clinical judgment.
+3. "recommendation": Optional; include only if the result is abnormal.
+
+Here are the test results to interpret:
+
+{lab_tests_json}
+
+Respond in the following format, one object per test:
+[
+    {{
+        "datetime": "...",
+        "test_name": "...",
+        "test_result": "...",
+        "test_uom": "...",
+        "classification": "...",
+        "reason": "...",
+        "recommendation": "..."  // blank if normal
+    }},
+    ...
+]
+
+Do NOT include explanations outside the JSON. Do NOT use Markdown or wrap the output in backticks.
+"""
 def _get_data_files(directory: str) -> List[Path]:
     """
     Recursively retrieve all PDF files from the specified directory.
@@ -105,6 +132,56 @@ def build_settings_dict() -> dict:
         "llm_model": SETTINGS.LLM_MODEL
     }
 
+def export_lab_results_to_sqlite(
+    lab_results: List["cls_Lab_Result"],
+    db_path: str,
+    table_name: str = "lab_results"
+) -> None:
+    """
+    Export a list of cls_Lab_Result objects to a SQLite database table.
+
+    Args:
+        lab_results (List[cls_Lab_Result]): List of results to export.
+        db_path (str): Path to the SQLite database file.
+        table_name (str): Name of the table to write to.
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    # Create table if not exists
+    cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            filename TEXT,
+            test_date TEXT,
+            test_name TEXT,
+            test_result TEXT,
+            test_uom TEXT,
+            classification TEXT,
+            reason TEXT,
+            recommendation TEXT,
+            PRIMARY KEY (test_date, test_name)
+        )
+    """)
+
+    # Insert rows
+    for result in lab_results:
+        cursor.execute(f"""
+            INSERT OR IGNORE INTO {table_name} (
+                filename, test_date, test_name, test_result, test_uom, classification, reason, recommendation
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            result.test_filename,
+            result.test_date.isoformat() if hasattr(result.test_date, 'isoformat') else result.test_date,
+            result.test_name,
+            result.test_result,
+            result.test_uom,
+            result.classification,
+            result.reason,
+            result.recommendation 
+        ))
+
+    conn.commit()
+    conn.close()
 
 def export_lab_results_to_csv(lab_results: List["cls_Lab_Result"], output_path: str) -> None:
     """
@@ -118,7 +195,7 @@ def export_lab_results_to_csv(lab_results: List["cls_Lab_Result"], output_path: 
         writer = csv.writer(csvfile)
 
         # Header
-        writer.writerow(["filename", "datetime", "test_name", "test_result", "test_uom", "ref_range", "diagnostic"])
+        writer.writerow(["filename", "datetime", "test_name", "test_result", "test_uom", "classification", "reason", "recommendation"])
 
         # Rows
         for result in lab_results:
@@ -128,8 +205,9 @@ def export_lab_results_to_csv(lab_results: List["cls_Lab_Result"], output_path: 
                 result.test_name,
                 result.test_result,
                 result.test_uom,
-                f"'{result.ref_range}" if result.ref_range else "",
-                result.diagnostic
+                result.classification,
+                result.reason,
+                result.recommendation
             ])
 
 def extract_test_datetime(text: str) -> Optional[str]:
@@ -145,10 +223,11 @@ def clean_pdf_text(text: str) -> str:
         if not re.search(r"Generated on:\s*\d{2} \w{3} \d{4}", line)
     )
 
-def get_datetime_object(test_datetime) -> Optional[datetime]:
+def get_date_object(test_datetime) -> Optional[date]:
     """Converts the test_datetime string into a datetime object if possible."""
     try:
-        return datetime.strptime(test_datetime, "%d %b %Y, %I:%M %p")
+        return datetime.strptime(test_datetime, "%d %b %Y, %I:%M %p").date()
+    
     except (TypeError, ValueError):
         return None
 
@@ -156,59 +235,16 @@ def get_joined_test_names(lab_results: List[cls_Lab_Result]) -> str:
     test_names = sorted({result.test_name.strip() for result in lab_results})
     return "\n".join(test_names)
 
-def extract_lab_results_from_pdf(data_file, settings_dict) -> Tuple[List[Dict], "datetime"]:
-    """
-    Extracts structured lab result data and test datetime from a PDF using an LLM.
-
-    Args:
-        data_file: A file-like object representing the PDF file.
-        settings_dict: Dictionary containing LLM client configuration.
-
-    Returns:
-        Tuple[List[Dict], datetime]: A list of extracted lab result dictionaries and the test datetime.
-    """
+def extract_lab_results_from_pdf(data_file, settings_dict) -> Tuple[List[Dict], "date"]:
     # Extract and clean text from PDF
     pdf_content = extract_pdf_text(data_file)
     cleaned_text = clean_pdf_text(pdf_content)
 
     # Extract and convert test datetime
     test_datetime_str = extract_test_datetime(cleaned_text)
-    test_datetime = get_datetime_object(test_datetime_str)
-
+    test_datetime = get_date_object(test_datetime_str)
     # Prepare and send prompt to LLM
-    prompt = extract_lab_tests_prompt_template.format(lab_result=cleaned_text.strip())
-    llm_client = cls_LLM.build_llm_client(settings_dict, prompt)
-    response = llm_client.completion()
-
-    # Parse LLM response
-    try:
-        data = json.loads(response)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Failed to parse LLM response as JSON: {e}")
-
-    return data, test_datetime
-
-def extract_lab_results_from_pdf(data_file, settings_dict) -> Tuple[List[Dict], "datetime"]:
-    """
-    Extracts structured lab result data and test datetime from a PDF using an LLM.
-
-    Args:
-        data_file: A file-like object representing the PDF file.
-        settings_dict: Dictionary containing LLM client configuration.
-
-    Returns:
-        Tuple[List[Dict], datetime]: A list of extracted lab result dictionaries and the test datetime.
-    """
-    # Extract and clean text from PDF
-    pdf_content = extract_pdf_text(data_file)
-    cleaned_text = clean_pdf_text(pdf_content)
-
-    # Extract and convert test datetime
-    test_datetime_str = extract_test_datetime(cleaned_text)
-    test_datetime = get_datetime_object(test_datetime_str)
-
-    # Prepare and send prompt to LLM
-    prompt = extract_lab_tests_prompt_template.format(lab_result=cleaned_text.strip())
+    prompt = extract_and_classify_lab_tests_prompt_template.format(lab_result=cleaned_text.strip())
     llm_client = cls_LLM.build_llm_client(settings_dict, prompt)
     response = llm_client.completion()
 
@@ -269,26 +305,34 @@ def standardize_lab_result_names_with_llm(
     # Apply standardization
     return standardize_test_names(lab_results, standardization_map)
 
+def extract_data_to_str(data: list[dict]) -> str:
+    output_str = ""
+    for result in data:
+        for attr, value in result.items():
+            output_str += f"{attr}: {value}\n"
+        output_str += "-" * 20 + "\n"
+    return output_str
+
 def main() -> None:
     data_storage_folder = "data\\all_data"
-
-
+    data_file = Path(".\\data\\selected_data\\Lab_Test_Results_030625(5).pdf")
     settings_dict = build_settings_dict()
-
     lab_results: List[cls_Lab_Result] = []
 
-    data_files = _get_data_files(data_storage_folder)
+    print(f"Processing file: {data_file.name}")
+    data_list, test_date = extract_lab_results_from_pdf(data_file, settings_dict)
     
-    for data_file in data_files:
-        print(f"Processing file: {data_file}")
-        data, test_datetime = extract_lab_results_from_pdf(data_file, settings_dict)
-        lab_results.extend(cls_Lab_Result.from_dict(item, data_file.name,test_datetime=test_datetime) 
-                            for item in data)
+    prompt = lab_result_classification_prompt.format(lab_tests_json=data_list)
+    llm_client = cls_LLM.build_llm_client(settings_dict, prompt)
+    response = llm_client.completion()
+    data = json.loads(response)
+    lab_results.extend(cls_Lab_Result.from_dict(item, data_file.name,test_date=test_date) 
+                        for item in data)
 
     lab_results = standardize_lab_result_names_with_llm(lab_results, settings_dict)
     
-    export_lab_results_to_csv(lab_results, "data\\output\\lab_results_output.csv")
-
+    # export_lab_results_to_csv(lab_results, "data\\output\\lab_results_output.csv")
+    export_lab_results_to_sqlite(lab_results, "data\\output\\med_multi_modal.db", "lab_result")
 
 if __name__ == "__main__":
     main()
