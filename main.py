@@ -6,88 +6,14 @@ import csv
 import re
 import sqlite3
 from src.utils.settings import SETTINGS 
-import src.utils.cls_LLM as cls_LLM
+from src.utils.llm_client import LLMClient
+import src.utils.config_loader as config_loader
+
 from datetime import date, datetime
-from src.utils.cls_Lab_Result import cls_Lab_Result
+from src.utils.lab_results import LabResult, LabResultList
 
-extract_and_classify_lab_tests_prompt_template = """
-You are a medical assistant AI. Given a medical lab test document, extract the following fields from the text:
 
-- datetime: The exact date and time the test was performed or reported.
-- test_name: The name of the medical test performed (e.g., "ALBUMIN, U (NHGD)").
-- test_result: The measured value (e.g., "24.0").
-- test_uom: The measured unit (e.g., mg/L).
 
-**Input text:**
-{lab_result}
-
-**Expected Output:**
-A list of JSON objects. One per test. Each object must follow this structure:
-[
-    {{
-        "datetime": "...",
-        "test_name": "...",
-        "test_result": "...",
-        "test_uom": "..."
-    }},
-    ...
-]
-
-Do NOT include Markdown formatting, explanations, or wrap the output in backticks.
-"""
-
-lab_test_name_grouping_prompt_template = """
-You are a medical data analyst.
-
-Your task:
-1. Group lab test names that are functionally or clinically equivalent.
-2. Assign a single standardized name to each group (e.g., "Glucose, Fasting").
-3. For each standardized name:
-   - Extract and list test name variants that appear as field labels, result headers, or measurement titles (e.g., "HbA1c (%)").
-   - Prefer these over descriptive names from narrative sections (e.g., avoid using "Haemoglobin A1c (HbA1c)" if "HbA1c (%)" appears as a result header).
-   - Additionally, include a separate row where the Standard Name maps to itself (e.g., "Albumin, Urine" -> "Albumin, Urine").
-4. Use the predefined standardization examples below when relevant.
-5. Return the result as a table with the following columns:
-   - Standard Name
-   - Variant Names (semicolon-separated)
-
-Predefined standardizations:
-{predefined_standardizations}
-
-Test names to group:
-{joined_tests}
-
-No Markdown formatting, explanations, or docstrings. Do NOT wrap your output in backticks.
-"""
-
-lab_result_classification_prompt = """
-You are a medical assistant AI. Interpret the following lab test results and classify whether each test is normal, high, or low.
-
-For each test, provide:
-1. "classification": "normal", "high", or "low"
-2. "reason": Brief explanation for the classification. If no reference range is given, use medically accepted typical ranges or clinical judgment.
-3. "recommendation": Optional; include only if the result is abnormal.
-
-Here are the test results to interpret:
-
-{lab_tests_json}
-
-Respond in the following format, one object per test:
-[
-    {{
-        "datetime": "...",
-        "test_name": "...",
-        "test_result": "...",
-        "test_uom": "...",
-        "classification": "...",
-        "reason": "...",
-        "recommendation": "..."  // blank if normal
-    }},
-    ...
-]
-
-Do NOT include explanations outside the JSON. Do NOT use Markdown or wrap the output in backticks.
-"""
 def _get_data_files(directory: str) -> List[Path]:
     """
     Recursively retrieve all PDF files from the specified directory.
@@ -101,7 +27,7 @@ def _get_data_files(directory: str) -> List[Path]:
     return list(Path(directory).rglob("*.pdf"))
 
 
-def extract_pdf_text(pdf_file_path: str) -> str:
+def _extract_pdf_text(pdf_file_path: str) -> str:
     """
     Extract and return text content from all pages of a PDF file.
 
@@ -140,7 +66,7 @@ def build_settings_dict() -> dict:
     }
 
 def export_lab_results_to_sqlite(
-    lab_results: List["cls_Lab_Result"],
+    lab_results: List["LabResult"],
     db_path: str,
     table_name: str = "lab_results"
 ) -> None:
@@ -195,14 +121,7 @@ def export_lab_results_to_sqlite(
     conn.commit()
     conn.close()
 
-def export_lab_results_to_csv(lab_results: List["cls_Lab_Result"], output_path: str) -> None:
-    """
-    Export a list of cls_Lab_Result objects to a CSV file.
-
-    Args:
-        lab_results (List[cls_Lab_Result]): List of results to export.
-        output_path (str): Path to the CSV file to write.
-    """
+def export_lab_results_to_csv(lab_results: LabResultList, output_path: str) -> None:
     with open(output_path, mode="w", newline="", encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile)
 
@@ -210,7 +129,7 @@ def export_lab_results_to_csv(lab_results: List["cls_Lab_Result"], output_path: 
         writer.writerow(["filename", "datetime", "test_common_name", "test_name", "test_result", "test_uom", "classification", "reason", "recommendation"])
 
         # Rows
-        for result in lab_results:
+        for result in lab_results.result:
             writer.writerow([
                 result.test_filename,
                 result.test_date,
@@ -223,12 +142,12 @@ def export_lab_results_to_csv(lab_results: List["cls_Lab_Result"], output_path: 
                 result.recommendation
             ])
 
-def extract_test_datetime(text: str) -> Optional[str]:
+def _extract_test_datetime(text: str) -> Optional[str]:
     """Extracts the test datetime from PDF content like 'Date: 01 Oct 2022, 08:46 AM'."""
     match = re.search(r"Date:\s*(\d{2} \w{3} \d{4}, \d{2}:\d{2} [AP]M)", text)
     return match.group(1) if match else None
 
-def clean_pdf_text(text: str) -> str:
+def _clean_pdf_text(text: str) -> str:
     """Removes known footer lines from extracted PDF text."""
     lines = text.splitlines()
     return "\n".join(
@@ -236,7 +155,7 @@ def clean_pdf_text(text: str) -> str:
         if not re.search(r"Generated on:\s*\d{2} \w{3} \d{4}", line)
     )
 
-def get_date_object(test_datetime) -> Optional[date]:
+def _get_date_object(test_datetime) -> Optional[date]:
     """Converts the test_datetime string into a datetime object if possible."""
     try:
         return datetime.strptime(test_datetime, "%d %b %Y, %I:%M %p").date()
@@ -244,7 +163,7 @@ def get_date_object(test_datetime) -> Optional[date]:
     except (TypeError, ValueError):
         return None
 
-def get_joined_test_names(lab_results: List[cls_Lab_Result]) -> str:
+def get_joined_test_names(lab_results: List[LabResult]) -> str:
     test_names = sorted({result.test_name.strip() for result in lab_results})
     return "\n".join(test_names)
 
@@ -281,28 +200,26 @@ def load_test_name_mappings_from_sqlite(
     return {variant: standard for variant, standard in rows}
 
 
-def extract_lab_results_from_pdf(data_file, settings_dict) -> Tuple[List[Dict], "date"]:
+def _extract_lab_results_from_pdf(data_file, settings_dict, prompt) -> Tuple[List[Dict], "date"]:
     # Extract and clean text from PDF
-    pdf_content = extract_pdf_text(data_file)
-    cleaned_text = clean_pdf_text(pdf_content)
+    pdf_content = _extract_pdf_text(data_file)
+    cleaned_text = _clean_pdf_text(pdf_content)
 
     # Extract and convert test datetime
-    test_datetime_str = extract_test_datetime(cleaned_text)
-    test_datetime = get_date_object(test_datetime_str)
-    # Prepare and send prompt to LLM
-    prompt = extract_and_classify_lab_tests_prompt_template.format(lab_result=cleaned_text.strip())
-    llm_client = cls_LLM.build_llm_client(settings_dict, prompt)
-    response = llm_client.completion()
+    test_datetime_str = _extract_test_datetime(cleaned_text)
+    test_datetime = _get_date_object(test_datetime_str)
+    response = LLMClient.run_prompt(settings_dict, prompt,
+                                  {"lab_result":cleaned_text.strip()})
 
     # Parse LLM response
     try:
-        data = json.loads(response)
+        lab_result_dicts = json.loads(response)
     except json.JSONDecodeError as e:
         raise ValueError(f"Failed to parse LLM response as JSON: {e}")
 
-    return data, test_datetime
+    return lab_result_dicts, test_datetime
 
-def standardize_test_names(lab_results: List[cls_Lab_Result], standardization_map):
+def standardize_test_names(lab_results: List[LabResult], standardization_map):
     for result in lab_results:
         if result.test_name:
             normalized_name = result.test_name.strip().lower()
@@ -321,18 +238,18 @@ def format_standardization_map(standardization_map: Dict[str, str]) -> str:
 
 def standardize_lab_result_names_with_llm(
     standardization_map: Dict[str, str],
-    lab_results: List["cls_Lab_Result"],
+    lab_results: List["LabResult"],
+    prompt_template: str, 
     settings_dict: dict
-) -> List["cls_Lab_Result"]:
+) -> List["LabResult"]:
     # Prepare joined test names and prompt
     predefined_standardizations = format_standardization_map(standardization_map)
     joined_tests = get_joined_test_names(lab_results)
-    prompt = lab_test_name_grouping_prompt_template.format(joined_tests=joined_tests,\
-                                            predefined_standardizations=predefined_standardizations)
-    
-    # Send prompt to LLM
-    llm_client = cls_LLM.build_llm_client(settings_dict, prompt)
-    response = llm_client.completion()
+
+
+    response = LLMClient.run_prompt(settings_dict=settings_dict,
+                                    prompt_template=prompt_template, 
+                                    prompt_context={"predefined_standardizations" : predefined_standardizations})
 
     # Parse LLM table output into a mapping
     standardization_map: Dict[str, str] = {}
@@ -399,7 +316,7 @@ def save_test_name_mappings_to_sqlite(
     conn.commit()
     conn.close()
 
-def read_lab_results_from_sqlite(db_path: str, table_name: str = "lab_results") -> List[cls_Lab_Result]:
+def read_lab_results_from_sqlite(db_path: str, table_name: str = "lab_results") -> List[LabResult]:
     """
     Reads lab results from a SQLite database and returns them as a list of cls_Lab_Result objects.
     Returns an empty list if the table does not exist.
@@ -431,7 +348,7 @@ def read_lab_results_from_sqlite(db_path: str, table_name: str = "lab_results") 
     rows = cursor.fetchall()
 
     lab_results = [
-        cls_Lab_Result(
+        LabResult(
             test_filename=row[0],
             test_date=row[1],
             test_common_name=row[2],
@@ -448,25 +365,68 @@ def read_lab_results_from_sqlite(db_path: str, table_name: str = "lab_results") 
     conn.close()
     return lab_results
 
-import src.utils.util as util
+
+def _classify_and_parse_lab_results(
+    lab_result_dicts: List[dict],
+    settings_dict: dict,
+    prompt_template: str,
+    data_file_name: str,
+    test_date: str
+) -> LabResultList:
+    """
+    Classifies lab results using LLM and parses them into a LabResultList.
+
+    Args:
+        lab_result_dicts: Raw extracted lab results from LLM or PDF.
+        settings_dict: Configuration dictionary for LLMClient.
+        prompt_template: Prompt string with {lab_tests_json} placeholder.
+        data_file_name: Name of the data file (for traceability).
+        test_date: Date of the test.
+
+    Returns:
+        LabResultList: Parsed and classified lab results.
+    """
+    # Step 1: Run LLM classification
+    classified_json = LLMClient.run_prompt(
+        settings_dict=settings_dict,
+        prompt_template=prompt_template,
+        prompt_context={"lab_tests_json": lab_result_dicts}
+    )
+
+    # Step 2: Convert JSON string to Python object
+    data = json.loads(classified_json)
+
+    # Step 3: Convert to LabResultList
+    lab_results = LabResultList()
+    lab_results.result = [
+        LabResult.from_dict(item, data_file_name, test_date=test_date)
+        for item in data
+    ]
+
+    return lab_results
 
 def main() -> None:
-    data_storage_folder = "data\\all_data"
-    data_file = Path(".\\data\\selected_data\\Lab_Test_Results_030625(5).pdf")
+    # Initialisation
     settings_dict = build_settings_dict()
-    lab_results: List[cls_Lab_Result] = []
-    all_lab_results: List[cls_Lab_Result] = []
-    print(f"Processing file: {data_file.name}")
-    data_list, test_date = extract_lab_results_from_pdf(data_file, settings_dict)
-    
+    config = config_loader.load_config(settings_dict["config_file_path"])    
+    data_file = Path(config["path"]["data_file"])
+    lab_results = LabResultList()
+    all_lab_results= LabResultList()
+    lab_result_classification_prompt=config["prompt"]["lab_result_classification_prompt"]
 
-    prompt = lab_result_classification_prompt.format(lab_tests_json=data_list)
-    llm_client = cls_LLM.build_llm_client(settings_dict, prompt)
-    response = llm_client.completion()
-    data = json.loads(response)
-    lab_results.extend(cls_Lab_Result.from_dict(item, data_file.name,test_date=test_date) 
-                        for item in data)
+    # Extract lab result from PDF
+    print(f"Processing file: {data_file.name}")
+    lab_result_dicts, test_date = _extract_lab_results_from_pdf(
+        data_file, settings_dict,
+        config["prompt"]["extract_and_classify_lab_tests_prompt_template"])
+
+    # # Derive Investigation from LLM
+    _classify_and_parse_lab_results(lab_result_dicts=lab_result_dicts, settings_dict=settings_dict,
+                                    prompt_template=lab_result_classification_prompt, 
+                                    data_file_name=data_file.name, test_date=test_date)
     all_lab_results.extend(lab_results)
+
+    # print(all_lab_results.test_filename)
     # standardization_map=load_test_name_mappings_from_sqlite("data\\output\\med_multi_modal.db", "test_name_mappings")
     # lab_results, new_standardization_map = standardize_lab_result_names_with_llm(standardization_map, all_lab_results, settings_dict)
     # if len(new_standardization_map)==0:
@@ -474,10 +434,10 @@ def main() -> None:
     # save_test_name_mappings_to_sqlite(new_standardization_map, "data\\output\\med_multi_modal.db", "test_name_mappings")
 
     export_lab_results_to_csv(all_lab_results, "data\\output\\lab_results_output.csv")
-    export_lab_results_to_sqlite(all_lab_results, "data\\output\\med_multi_modal.db", "lab_results")
-    lab_results = read_lab_results_from_sqlite("data\\output\\med_multi_modal.db","lab_results")
-    print(len(lab_results))
-    print(extract_data_to_str(lab_results))
+    export_lab_results_to_sqlite(all_lab_results.result, "data\\output\\med_multi_modal.db", "lab_results")
+    # lab_results = read_lab_results_from_sqlite("data\\output\\med_multi_modal.db","lab_results")
+    # print(len(lab_results))
+    # print(extract_data_to_str(lab_results))
 
     # standardization_map_str = format_standardization_map(new_standardization_map)
     # print(standardization_map_str)
