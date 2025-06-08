@@ -1,6 +1,6 @@
 
 path:
-  data_file: ".\\data\\selected_data\\Lab_Test_Results_030625(5).pdf"
+  data_file: ".\\data\\selected_data\\Lab_Test_Results_030625(5)_1.pdf"
 
 sqllite:
   file: ".\\data\\output\\med_multi_modal.db"
