@@ -8,6 +8,7 @@ import sqlite3
 from src.utils.settings import SETTINGS 
 from src.utils.llm_client import LLMClient
 import src.utils.config_loader as config_loader
+import src.utils.lab_result_repository as sqlite3_lib
 
 from datetime import date, datetime
 from src.utils.lab_results import LabResult, LabResultList
@@ -316,54 +317,6 @@ def save_test_name_mappings_to_sqlite(
     conn.commit()
     conn.close()
 
-def read_lab_results_from_sqlite(db_path: str, table_name: str = "lab_results") -> List[LabResult]:
-    """
-    Reads lab results from a SQLite database and returns them as a list of cls_Lab_Result objects.
-    Returns an empty list if the table does not exist.
-
-    Args:
-        db_path (str): Path to the SQLite database file.
-        table_name (str): Name of the table to read from.
-
-    Returns:
-        List[cls_Lab_Result]: List of lab result objects or empty list if table not found.
-    """
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
-    # Check if the table exists
-    cursor.execute("""
-        SELECT name FROM sqlite_master WHERE type='table' AND name=?
-    """, (table_name,))
-    if cursor.fetchone() is None:
-        conn.close()
-        return []
-
-    # Fetch rows
-    cursor.execute(f"""
-        SELECT filename, test_date, test_common_name, test_name, test_result, test_uom,
-               classification, reason, recommendation
-        FROM {table_name}
-    """)
-    rows = cursor.fetchall()
-
-    lab_results = [
-        LabResult(
-            test_filename=row[0],
-            test_date=row[1],
-            test_common_name=row[2],
-            test_name=row[3],
-            test_result=row[4],
-            test_uom=row[5],
-            classification=row[6],
-            reason=row[7],
-            recommendation=row[8]  
-        )
-        for row in rows
-    ]
-
-    conn.close()
-    return lab_results
 
 
 def _classify_and_parse_lab_results(
@@ -392,55 +345,70 @@ def _classify_and_parse_lab_results(
         prompt_template=prompt_template,
         prompt_context={"lab_tests_json": lab_result_dicts}
     )
-
     # Step 2: Convert JSON string to Python object
     data = json.loads(classified_json)
-
     # Step 3: Convert to LabResultList
     lab_results = LabResultList()
     lab_results.result = [
         LabResult.from_dict(item, data_file_name, test_date=test_date)
         for item in data
     ]
-
     return lab_results
+
 
 def main() -> None:
     # Initialisation
     settings_dict = build_settings_dict()
     config = config_loader.load_config(settings_dict["config_file_path"])    
     data_file = Path(config["path"]["data_file"])
+    sqllite_file = Path(config["sqllite"]["file"])
+    table_name = config["sqllite"]["table_name"]
     lab_results = LabResultList()
+    new_lab_results = LabResultList()
     all_lab_results= LabResultList()
     lab_result_classification_prompt=config["prompt"]["lab_result_classification_prompt"]
+
+    # Read previous lab result from SQLLite
+    lab_results = new_lab_results = sqlite3_lib.read_lab_results_from_sqlite(
+        sqllite_file, table_name)
+    unique_name_pairs =lab_results.get_unique_test_names_str()
+    print(f"Total unique_pairs: {unique_name_pairs}")
 
     # Extract lab result from PDF
     print(f"Processing file: {data_file.name}")
     lab_result_dicts, test_date = _extract_lab_results_from_pdf(
         data_file, settings_dict,
         config["prompt"]["extract_and_classify_lab_tests_prompt_template"])
-
-    # # Derive Investigation from LLM
-    _classify_and_parse_lab_results(lab_result_dicts=lab_result_dicts, settings_dict=settings_dict,
+    
+    # Derive Investigation from LLM
+    lab_results= _classify_and_parse_lab_results(lab_result_dicts=lab_result_dicts, 
+                                    settings_dict=settings_dict,
                                     prompt_template=lab_result_classification_prompt, 
                                     data_file_name=data_file.name, test_date=test_date)
-    all_lab_results.extend(lab_results)
+    
+    # Update Standard Name
+    unmapped_varied_name = lab_results.get_unmapped_test_names_str()
+    classified_json = LLMClient.run_prompt(
+        settings_dict=settings_dict,
+        prompt_template=config["prompt"]["lab_test_name_grouping_prompt_template"],
+        prompt_context={"standard_mappings": unique_name_pairs,
+                        "new_variants": unmapped_varied_name}
+    )
+    classified_data = json.loads(classified_json) 
+    correction_dict = {
+        item["variant_name"]: item["standard_name"]
+        for item in classified_data
+    }
+    lab_results.apply_standardization(correction_dict)
 
-    # print(all_lab_results.test_filename)
-    # standardization_map=load_test_name_mappings_from_sqlite("data\\output\\med_multi_modal.db", "test_name_mappings")
-    # lab_results, new_standardization_map = standardize_lab_result_names_with_llm(standardization_map, all_lab_results, settings_dict)
-    # if len(new_standardization_map)==0:
-    #     new_standardization_map = standardization_map
-    # save_test_name_mappings_to_sqlite(new_standardization_map, "data\\output\\med_multi_modal.db", "test_name_mappings")
+    # Update to  sqllite
+    new_lab_results.extend(lab_results)
+    export_lab_results_to_sqlite(new_lab_results.result, sqllite_file, table_name)
 
-    export_lab_results_to_csv(all_lab_results, "data\\output\\lab_results_output.csv")
-    export_lab_results_to_sqlite(all_lab_results.result, "data\\output\\med_multi_modal.db", "lab_results")
-    # lab_results = read_lab_results_from_sqlite("data\\output\\med_multi_modal.db","lab_results")
-    # print(len(lab_results))
-    # print(extract_data_to_str(lab_results))
+    # Retrive and output table rows
+    lab_results = sqlite3_lib.read_lab_results_from_sqlite(sqllite_file, table_name)
+    print(lab_results.describe())
 
-    # standardization_map_str = format_standardization_map(new_standardization_map)
-    # print(standardization_map_str)
 
 if __name__ == "__main__":
     main()
