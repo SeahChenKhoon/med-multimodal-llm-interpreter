@@ -71,9 +71,6 @@ class LLMClient:
     
     @staticmethod
     def run_prompt(settings_dict: dict, prompt_template: str, prompt_context: dict) -> str:
-        """
-        Fills in the prompt template and returns the LLM response.
-        """
         prompt = prompt_template.format(**prompt_context)
         llm_client = build_llm_client(settings_dict, prompt)
         response = llm_client.completion()
