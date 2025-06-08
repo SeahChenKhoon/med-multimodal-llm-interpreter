@@ -22,7 +22,6 @@ class Settings(BaseSettings):
     AZURE_OPENAI_DEPLOYMENT: str
     AZURE_API_VERSION: str
 
-    LLM_TEMPERATURE: float
-
+    CONFIG_FILE_PATH: str
 
 SETTINGS = Settings()
