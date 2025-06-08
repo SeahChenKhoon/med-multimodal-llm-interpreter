@@ -1,31 +1,20 @@
-from typing import List, Tuple, Optional, Dict
-from pathlib import Path
-from pypdf import PdfReader
-import json
 import csv
+import json
 import re
 import sqlite3
-from src.utils.settings import SETTINGS 
-from src.utils.llm_client import LLMClient
+from datetime import date, datetime
+from pathlib import Path
+
+from typing import Any, Dict, List, Optional, Tuple
+
+from pypdf import PdfReader
+
 import src.utils.config_loader as config_loader
 import src.utils.lab_result_repository as sqlite3_lib
-
-from datetime import date, datetime
 from src.utils.lab_results import LabResult, LabResultList
+from src.utils.llm_client import LLMClient
+from src.utils.settings import SETTINGS
 
-
-
-def _get_data_files(directory: str) -> List[Path]:
-    """
-    Recursively retrieve all PDF files from the specified directory.
-
-    Args:
-        directory (str): Path to the root directory to search for PDF files.
-
-    Returns:
-        List[Path]: A list of Path objects representing all found PDF files.
-    """
-    return list(Path(directory).rglob("*.pdf"))
 
 
 def _extract_pdf_text(pdf_file_path: str) -> str:
@@ -47,12 +36,15 @@ def _extract_pdf_text(pdf_file_path: str) -> str:
     return text
 
 
-def build_settings_dict() -> dict:
+def _build_settings_dict() -> dict:
     """
-    Build and return the LLM settings dictionary from global SETTINGS.
+    Builds a dictionary of configuration settings used to initialize LLM clients and other components.
+
+    This function gathers values from a global SETTINGS object, which typically contains environment-specific
+    variables such as API keys, endpoints, model identifiers, and file paths.
 
     Returns:
-        dict: Dictionary containing LLM-related configuration values.
+        dict: A dictionary containing keys for LLM provider settings, API keys, configuration paths, and model info.
     """
     return {
         "provider": SETTINGS.LLM_PROVIDER,
@@ -66,142 +58,80 @@ def build_settings_dict() -> dict:
         "config_file_path": SETTINGS.CONFIG_FILE_PATH
     }
 
-def export_lab_results_to_sqlite(
-    lab_results: List["LabResult"],
-    db_path: str,
-    table_name: str = "lab_results"
-) -> None:
-    """
-    Export a list of cls_Lab_Result objects to a SQLite database table.
-
-    Args:
-        lab_results (List[cls_Lab_Result]): List of results to export.
-        db_path (str): Path to the SQLite database file.
-        table_name (str): Name of the table to write to.
-    """
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
-    cursor.execute(f"""
-        DROP TABLE IF EXISTS  {table_name}""")
-
-    # Create table if not exists
-    cursor.execute(f"""
-        CREATE TABLE IF NOT EXISTS {table_name} (
-            filename TEXT,
-            test_date TEXT,
-            test_common_name TEXT,
-            test_name TEXT,
-            test_result TEXT,
-            test_uom TEXT,
-            classification TEXT,
-            reason TEXT,
-            recommendation TEXT,
-            PRIMARY KEY (test_date, test_name)
-        )
-    """)
-
-    # Insert rows
-    for result in lab_results:
-        cursor.execute(f"""
-            INSERT OR IGNORE INTO {table_name} (
-                filename, test_date, test_common_name, test_name, test_result, test_uom, classification, reason, recommendation
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            result.test_filename,
-            result.test_date.isoformat() if hasattr(result.test_date, 'isoformat') else result.test_date,
-            result.test_common_name,
-            result.test_name,
-            result.test_result,
-            result.test_uom,
-            result.classification,
-            result.reason,
-            result.recommendation 
-        ))
-
-    conn.commit()
-    conn.close()
-
-def export_lab_results_to_csv(lab_results: LabResultList, output_path: str) -> None:
-    with open(output_path, mode="w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.writer(csvfile)
-
-        # Header
-        writer.writerow(["filename", "datetime", "test_common_name", "test_name", "test_result", "test_uom", "classification", "reason", "recommendation"])
-
-        # Rows
-        for result in lab_results.result:
-            writer.writerow([
-                result.test_filename,
-                result.test_date,
-                result.test_common_name,
-                result.test_name,
-                result.test_result,
-                result.test_uom,
-                result.classification,
-                result.reason,
-                result.recommendation
-            ])
 
 def _extract_test_datetime(text: str) -> Optional[str]:
-    """Extracts the test datetime from PDF content like 'Date: 01 Oct 2022, 08:46 AM'."""
+    """
+    Extracts the test datetime from PDF content.
+
+    The function looks for a line in the format:
+        'Date: 01 Oct 2022, 08:46 AM'
+
+    Args:
+        text (str): The extracted text content from a PDF file.
+
+    Returns:
+        Optional[str]: A string containing the datetime in the format 'DD MMM YYYY, HH:MM AM/PM',
+                       or None if no match is found.
+    """
     match = re.search(r"Date:\s*(\d{2} \w{3} \d{4}, \d{2}:\d{2} [AP]M)", text)
     return match.group(1) if match else None
 
+
 def _clean_pdf_text(text: str) -> str:
-    """Removes known footer lines from extracted PDF text."""
+    """
+    Cleans extracted PDF text by removing known footer lines such as those containing
+    'Generated on: DD MMM YYYY'.
+
+    Args:
+        text (str): Raw text extracted from a PDF.
+
+    Returns:
+        str: Cleaned text with footer lines removed.
+    """
     lines = text.splitlines()
     return "\n".join(
         line for line in lines
         if not re.search(r"Generated on:\s*\d{2} \w{3} \d{4}", line)
     )
 
-def _get_date_object(test_datetime) -> Optional[date]:
-    """Converts the test_datetime string into a datetime object if possible."""
+
+def _get_date_object(test_datetime: Optional[str]) -> Optional[date]:
+    """
+    Converts a datetime string into a `date` object.
+
+    Args:
+        test_datetime (Optional[str]): A string representing the datetime, expected in the format
+                                       "%d %b %Y, %I:%M %p" (e.g., "11 Jan 2025, 08:04 AM").
+
+    Returns:
+        Optional[date]: A `date` object if conversion succeeds, otherwise `None`.
+    """
     try:
         return datetime.strptime(test_datetime, "%d %b %Y, %I:%M %p").date()
-    
     except (TypeError, ValueError):
         return None
 
-def get_joined_test_names(lab_results: List[LabResult]) -> str:
-    test_names = sorted({result.test_name.strip() for result in lab_results})
-    return "\n".join(test_names)
 
-def load_test_name_mappings_from_sqlite(
-    db_path: str,
-    table_name: str = "test_name_mappings"
-) -> Dict[str, str]:
+def _extract_lab_results_from_pdf(
+    data_file, settings_dict: dict, prompt: str
+) -> Tuple[List[Dict], date]:
     """
-    Loads test name variant-to-standard mappings from a SQLite table into a dictionary.
+    Extracts lab test results from a PDF file using an LLM and returns the structured results
+    along with the date the test was conducted.
 
     Args:
-        db_path (str): Path to the SQLite database file.
-        table_name (str): Name of the table containing the mappings.
+        data_file: Path or file-like object representing the PDF file.
+        settings_dict (dict): Dictionary containing LLM configuration settings.
+        prompt (str): Prompt template to guide the LLM extraction.
 
     Returns:
-        Dict[str, str]: A dictionary where keys are variant names and values are standard names.
+        Tuple[List[Dict], date]: A tuple containing:
+            - A list of dictionaries representing individual lab test results.
+            - A date object representing the test date extracted from the PDF.
+    
+    Raises:
+        ValueError: If the LLM response cannot be parsed as valid JSON.
     """
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
-    # Check if the table exists
-    cursor.execute("""
-        SELECT name FROM sqlite_master WHERE type='table' AND name=?
-    """, (table_name,))
-    if cursor.fetchone() is None:
-        conn.close()
-        return {}
-
-    # Retrieve mappings
-    cursor.execute(f"SELECT variant_name, standard_name FROM {table_name}")
-    rows = cursor.fetchall()
-
-    conn.close()
-    return {variant: standard for variant, standard in rows}
-
-
-def _extract_lab_results_from_pdf(data_file, settings_dict, prompt) -> Tuple[List[Dict], "date"]:
     # Extract and clean text from PDF
     pdf_content = _extract_pdf_text(data_file)
     cleaned_text = _clean_pdf_text(pdf_content)
@@ -219,103 +149,6 @@ def _extract_lab_results_from_pdf(data_file, settings_dict, prompt) -> Tuple[Lis
         raise ValueError(f"Failed to parse LLM response as JSON: {e}")
 
     return lab_result_dicts, test_datetime
-
-def standardize_test_names(lab_results: List[LabResult], standardization_map):
-    for result in lab_results:
-        if result.test_name:
-            normalized_name = result.test_name.strip().lower()
-            if normalized_name in standardization_map:
-                result.test_name = standardization_map[normalized_name]
-    return lab_results
-
-def format_standardization_map(standardization_map: Dict[str, str]) -> str:
-    output_str = "Variant Name -> Standard Name\n"
-    output_str += "-" * 40 + "\n"
-    
-    for variant, standard in standardization_map.items():
-        output_str += f"{variant} -> {standard}\n"
-    return output_str
-
-
-def standardize_lab_result_names_with_llm(
-    standardization_map: Dict[str, str],
-    lab_results: List["LabResult"],
-    prompt_template: str, 
-    settings_dict: dict
-) -> List["LabResult"]:
-    # Prepare joined test names and prompt
-    predefined_standardizations = format_standardization_map(standardization_map)
-    joined_tests = get_joined_test_names(lab_results)
-
-
-    response = LLMClient.run_prompt(settings_dict=settings_dict,
-                                    prompt_template=prompt_template, 
-                                    prompt_context={"predefined_standardizations" : predefined_standardizations})
-
-    # Parse LLM table output into a mapping
-    standardization_map: Dict[str, str] = {}
-
-    for line in response.strip().split("\n"):
-        if "|" not in line:
-            continue
-        parts = [part.strip() for part in line.split("|")]
-        if len(parts) != 2:
-            continue
-        standard_name, variants = parts
-        for variant in variants.split(";"):
-            normalized_variant = variant.strip().lower()
-            standardization_map[normalized_variant] = standard_name
-
-    # Apply standardization
-    return standardize_test_names(lab_results, standardization_map), standardization_map
-
-def extract_data_to_str(data: list) -> str:
-    output_str = ""
-    for result in data:
-        for attr in [
-            "test_filename", "test_date", "test_common_name", "test_name", "test_result", "test_uom",
-            "classification", "reason", "recommendation"
-        ]:
-            value = getattr(result, attr, "")
-            output_str += f"{attr}: {value}\n"
-        output_str += "-" * 20 + "\n"
-    return output_str
-
-def save_test_name_mappings_to_sqlite(
-    mapping: Dict[str, str],
-    db_path: str,
-    table_name: str = "test_name_mappings"
-) -> None:
-    """
-    Saves a dictionary of variant-to-standard test name mappings into a SQLite table.
-
-    Args:
-        mapping (Dict[str, str]): Dictionary where keys are variant names and values are standard names.
-        db_path (str): Path to the SQLite database file.
-        table_name (str): Name of the table to store the mappings.
-    """
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
-    # Create table if it doesn't exist
-    cursor.execute(f"""
-        CREATE TABLE IF NOT EXISTS {table_name} (
-            variant_name TEXT PRIMARY KEY,
-            standard_name TEXT
-        )
-    """)
-
-    # Optional: skip dictionary header if present
-    for variant, standard in mapping.items():
-        if variant.lower() == "variant names" and standard.lower() == "standard name":
-            continue
-        cursor.execute(f"""
-            INSERT OR REPLACE INTO {table_name} (variant_name, standard_name)
-            VALUES (?, ?)
-        """, (variant, standard))
-
-    conn.commit()
-    conn.close()
 
 
 
@@ -357,22 +190,34 @@ def _classify_and_parse_lab_results(
 
 
 def main() -> None:
+    """
+    Main orchestration function for processing medical lab results.
+
+    Workflow:
+    1. Loads configuration and settings.
+    2. Reads previously stored lab results from SQLite.
+    3. Extracts new lab results from a specified PDF file using an LLM.
+    4. Classifies and parses the extracted lab results using another LLM prompt.
+    5. Standardizes test names using previously seen names and the LLM.
+    6. Updates the SQLite database with the newly processed lab results.
+    7. Reloads the full dataset and prints a summary.
+
+    Returns:
+        None
+    """
     # Initialisation
-    settings_dict = build_settings_dict()
+    settings_dict = _build_settings_dict()
     config = config_loader.load_config(settings_dict["config_file_path"])    
     data_file = Path(config["path"]["data_file"])
     sqllite_file = Path(config["sqllite"]["file"])
     table_name = config["sqllite"]["table_name"]
     lab_results = LabResultList()
-    new_lab_results = LabResultList()
-    all_lab_results= LabResultList()
     lab_result_classification_prompt=config["prompt"]["lab_result_classification_prompt"]
 
     # Read previous lab result from SQLLite
-    lab_results = new_lab_results = sqlite3_lib.read_lab_results_from_sqlite(
+    db_lab_results = sqlite3_lib.read_lab_results_from_sqlite(
         sqllite_file, table_name)
-    unique_name_pairs =lab_results.get_unique_test_names_str()
-    print(f"Total unique_pairs: {unique_name_pairs}")
+    unique_name_pairs =db_lab_results.get_unique_test_names_str()
 
     # Extract lab result from PDF
     print(f"Processing file: {data_file.name}")
@@ -387,23 +232,13 @@ def main() -> None:
                                     data_file_name=data_file.name, test_date=test_date)
     
     # Update Standard Name
-    unmapped_varied_name = lab_results.get_unmapped_test_names_str()
-    classified_json = LLMClient.run_prompt(
-        settings_dict=settings_dict,
-        prompt_template=config["prompt"]["lab_test_name_grouping_prompt_template"],
-        prompt_context={"standard_mappings": unique_name_pairs,
-                        "new_variants": unmapped_varied_name}
-    )
-    classified_data = json.loads(classified_json) 
-    correction_dict = {
-        item["variant_name"]: item["standard_name"]
-        for item in classified_data
-    }
-    lab_results.apply_standardization(correction_dict)
+    lab_results.standardize_test_names(
+            settings_dict=settings_dict, 
+            prompt_template=config["prompt"]["lab_test_name_grouping_prompt_template"],
+            unique_name_pairs=unique_name_pairs)
 
     # Update to  sqllite
-    new_lab_results.extend(lab_results)
-    export_lab_results_to_sqlite(new_lab_results.result, sqllite_file, table_name)
+    sqlite3_lib.export_lab_results_to_sqlite(lab_results.result, sqllite_file, table_name)
 
     # Retrive and output table rows
     lab_results = sqlite3_lib.read_lab_results_from_sqlite(sqllite_file, table_name)
