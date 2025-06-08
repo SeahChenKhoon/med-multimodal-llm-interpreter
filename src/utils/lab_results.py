@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Set, Tuple
 
 class LabResult:
     """
@@ -103,3 +103,48 @@ class LabResultList:
             lab_result_list (LabResultList): Another instance whose results will be appended.
         """
         self.result.extend(lab_result_list.result)
+
+    def get_unique_test_names_str(self) -> str:
+        """
+        Returns a newline-separated string of unique (test_common_name, test_name) pairs.
+        """
+        unique_pairs = {
+            (result.test_common_name, result.test_name)
+            for result in self.result
+        }
+        return "\n".join(f"{common or ''} -> {name or ''}" for common, name in unique_pairs)
+    
+    def get_unmapped_test_names_str(self) -> str:
+        """
+        Returns a newline-separated string of LabResult.test_name values
+        where test_common_name is None.
+
+        Returns:
+            str: A string of test_name entries with no common name, separated by newlines.
+        """
+        return "\n".join(
+            result.test_name for result in self.result
+            if result.test_common_name is None and result.test_name
+        ) 
+
+    def apply_standardization(self, correction_dict: Dict[str, str]) -> None:
+        """
+        Update test_common_name for each LabResult based on correction_dict,
+        using test_name as the key.
+        """
+        for result in self.result:
+            if result.test_name and result.test_name in correction_dict:
+                result.test_common_name = correction_dict[result.test_name]
+
+    def describe(self) -> str:
+        """
+        Returns a formatted string listing each LabResult in the list
+        with all its attributes and values, along with the total count.
+        """
+        descriptions = [f"Total Lab Results: {len(self.result)}"]
+        for idx, result in enumerate(self.result, start=1):
+            lines = [f"\nLabResult #{idx}"]
+            for attr, value in vars(result).items():
+                lines.append(f"  {attr}: {value}")
+            descriptions.append("\n".join(lines))
+        return "\n".join(descriptions)
