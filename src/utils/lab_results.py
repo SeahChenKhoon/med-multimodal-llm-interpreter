@@ -1,5 +1,8 @@
+import json
 from datetime import date, datetime
 from typing import Optional, List, Dict, Set, Tuple
+
+from src.utils.llm_client import LLMClient
 
 class LabResult:
     """
@@ -68,22 +71,7 @@ class LabResult:
             recommendation=data.get("recommendation"),
         )
 
-    def get_datetime_object(self) -> Optional[date]:
-        """
-        Converts the test_date string into a datetime.date object.
 
-        Expected format: "11 Jan 2025, 08:04 AM"
-
-        Returns:
-            Optional[date]: A date object if parsing succeeds, otherwise None.
-        """
-        if self.test_date:
-            try:
-                return datetime.strptime(self.test_date, "%d %b %Y, %I:%M %p").date()
-            except ValueError:
-                pass  # You could log the error if needed
-        return None
-    
 class LabResultList:
     """
     A container class for holding and manipulating a list of LabResult objects.
@@ -95,18 +83,15 @@ class LabResultList:
         """
         self.result: List[LabResult] = []
 
-    def extend(self, lab_result_list: "LabResultList") -> None:
-        """
-        Extends the current LabResult list with another LabResultList.
-
-        Args:
-            lab_result_list (LabResultList): Another instance whose results will be appended.
-        """
-        self.result.extend(lab_result_list.result)
 
     def get_unique_test_names_str(self) -> str:
         """
-        Returns a newline-separated string of unique (test_common_name, test_name) pairs.
+        Constructs a newline-separated string of unique (test_common_name, test_name) pairs
+        from the lab results.
+
+        Returns:
+            str: A string where each line represents a unique pair in the format 
+                'test_common_name -> test_name'. If any field is None, it is replaced with an empty string.
         """
         unique_pairs = {
             (result.test_common_name, result.test_name)
@@ -114,32 +99,42 @@ class LabResultList:
         }
         return "\n".join(f"{common or ''} -> {name or ''}" for common, name in unique_pairs)
     
+
     def get_unmapped_test_names_str(self) -> str:
         """
         Returns a newline-separated string of LabResult.test_name values
         where test_common_name is None.
 
+        This is typically used to identify test names that need standardization.
+
         Returns:
-            str: A string of test_name entries with no common name, separated by newlines.
+            str: A newline-separated string of test_name values lacking a standard name.
         """
         return "\n".join(
             result.test_name for result in self.result
             if result.test_common_name is None and result.test_name
         ) 
+    
 
     def apply_standardization(self, correction_dict: Dict[str, str]) -> None:
         """
-        Update test_common_name for each LabResult based on correction_dict,
-        using test_name as the key.
+        Applies standardization to each LabResult's `test_common_name` based on a correction dictionary.
+
+        Args:
+            correction_dict (Dict[str, str]): A mapping from variant `test_name` to standardized `test_common_name`.
         """
         for result in self.result:
             if result.test_name and result.test_name in correction_dict:
                 result.test_common_name = correction_dict[result.test_name]
 
+
     def describe(self) -> str:
         """
-        Returns a formatted string listing each LabResult in the list
-        with all its attributes and values, along with the total count.
+        Returns a formatted string summarizing all LabResult entries in the list.
+        Includes the total count and all attributes of each LabResult instance.
+
+        Returns:
+            str: A human-readable summary of the lab results.
         """
         descriptions = [f"Total Lab Results: {len(self.result)}"]
         for idx, result in enumerate(self.result, start=1):
@@ -148,3 +143,39 @@ class LabResultList:
                 lines.append(f"  {attr}: {value}")
             descriptions.append("\n".join(lines))
         return "\n".join(descriptions)
+    
+    
+    def standardize_test_names(
+        self, settings_dict: dict, prompt_template: str, unique_name_pairs: str
+    ) -> None:
+        """
+        Uses an LLM to standardize test names in the LabResultList by updating test_common_name.
+
+        Args:
+            settings_dict (dict): Dictionary of LLM settings and API keys.
+            prompt_template (str): Template used to generate the LLM prompt.
+            unique_name_pairs (str): String of existing (common_name -> test_name) mappings.
+        """
+        unmapped_names = self.get_unmapped_test_names_str()
+        if not unmapped_names.strip():
+            return  # Nothing to standardize
+
+        response = LLMClient.run_prompt(
+            settings_dict=settings_dict,
+            prompt_template=prompt_template,
+            prompt_context={
+                "standard_mappings": unique_name_pairs,
+                "new_variants": unmapped_names
+            }
+        )
+
+        try:
+            classified_data = json.loads(response)
+            correction_dict = {
+                item["variant_name"]: item["standard_name"]
+                for item in classified_data
+            }
+            self.apply_standardization(correction_dict)
+        except (json.JSONDecodeError, KeyError) as e:
+            raise ValueError(f"Standardization failed: {e}")
+        
