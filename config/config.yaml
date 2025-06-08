@@ -1,7 +1,94 @@
 
+path:
+  data_file: ".\\data\\selected_data\\Lab_Test_Results_030625(4).pdf"
 
+sqllite:
+  file: ".\\data\\selected_data\\Lab_Test_Results_030625(4).pdf"
+  table_name: "lab_results"
 
+prompt:
+  extract_and_classify_lab_tests_prompt_template :
+    '
+      You are a medical assistant AI. Given a medical lab test document, extract the following fields from the text:
 
+      - datetime: The exact date and time the test was performed or reported.
+      - test_name: The name of the medical test performed (e.g., "ALBUMIN, U (NHGD)").
+      - test_result: The measured value (e.g., "24.0").
+      - test_uom: The measured unit (e.g., mg/L).
+
+      **Input text:**
+      {lab_result}
+
+      **Expected Output:**
+      A list of JSON objects. One per test. Each object must follow this structure:
+      [
+          {{
+              "datetime": "...",
+              "test_name": "...",
+              "test_result": "...",
+              "test_uom": "..."
+          }},
+          ...
+      ]
+
+      Do NOT include Markdown formatting, explanations, or wrap the output in backticks.
+    '
+
+  lab_test_name_grouping_prompt_template :
+    '
+      You are a medical data analyst.
+
+      Your task:
+      1. Group lab test names that are functionally or clinically equivalent.
+      2. Assign a single standardized name to each group (e.g., "Glucose, Fasting").
+      3. For each standardized name:
+        - Extract and list test name variants that appear as field labels, result headers, or measurement titles (e.g., "HbA1c (%)").
+        - Prefer these over descriptive names from narrative sections (e.g., avoid using "Haemoglobin A1c (HbA1c)" if "HbA1c (%)" appears as a result header).
+        - Additionally, include a separate row where the Standard Name maps to itself (e.g., "Albumin, Urine" -> "Albumin, Urine").
+      4. Use the predefined standardization examples below when relevant.
+      5. Return the result as a table with the following columns:
+        - Standard Name
+        - Variant Names (semicolon-separated)
+
+      Predefined standardizations:
+      {predefined_standardizations}
+
+      Test names to group:
+      {joined_tests}
+
+      No Markdown formatting, explanations, or docstrings. Do NOT wrap your output in backticks.
+    '
+
+  lab_result_classification_prompt :
+    '
+      You are a medical assistant AI. Interpret the following lab test results and classify whether each test is normal, high, or low.
+
+      For each test, provide:
+      1. "classification": "normal", "high", or "low"
+      2. "reason": Brief explanation for the classification. If no reference range is given, use medically accepted typical ranges or clinical judgment.
+      3. "recommendation": Optional; include only if the result is abnormal.
+
+      Here are the test results to interpret:
+
+      {lab_tests_json}
+
+      Respond in the following format, one object per test:
+      [
+          {{
+              "datetime": "...",
+              "test_name": "...",
+              "test_result": "...",
+              "test_uom": "...",
+              "classification": "...",
+              "reason": "...",
+              "recommendation": "..."  // blank if normal
+          }},
+          ...
+      ]
+
+      Do NOT include explanations outside the JSON. Do NOT use Markdown or wrap the output in backticks.
+    '
+    
 defaults:
   - _self_
   - prompts
