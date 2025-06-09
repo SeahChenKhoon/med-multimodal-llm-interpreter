@@ -210,6 +210,16 @@ class LabResultList:
 
 
     def read_lab_results_from_sqlite(db_path: str, table_name: str) -> "LabResultList":
+        """
+        Reads lab result records from a SQLite database and returns them as a LabResultList.
+
+        Args:
+            db_path (str): Path to the SQLite database file.
+            table_name (str): Name of the table containing lab results.
+
+        Returns:
+            LabResultList: A populated or empty list-like object of LabResult instances.
+        """
         lab_result_list = LabResultList()
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
@@ -220,7 +230,7 @@ class LabResultList:
         """, (table_name,))
         if cursor.fetchone() is None:
             conn.close()
-            return []
+            return lab_result_list
 
         # Fetch rows
         cursor.execute(f"""
@@ -230,8 +240,8 @@ class LabResultList:
         """)
         rows = cursor.fetchall()
 
-        lab_result_list.result = [
-            LabResult(
+        for row in rows:
+            lab_result = LabResult(
                 test_filename=row[0],
                 test_date=row[1],
                 test_common_name=row[2],
@@ -240,10 +250,10 @@ class LabResultList:
                 test_uom=row[5],
                 classification=row[6],
                 reason=row[7],
-                recommendation=row[8]  
+                recommendation=row[8]
             )
-            for row in rows
-        ]
+            lab_result_list.result.append(lab_result)
+
         conn.close()
         return lab_result_list
 
