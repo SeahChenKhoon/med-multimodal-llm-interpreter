@@ -6,6 +6,7 @@ import os
 import uuid
 from datetime import date, datetime
 from pathlib import Path
+import pandas as pd
 
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -347,6 +348,9 @@ def main() -> None:
 
                 # Step 3: Filter original df for all records of this test_name
                 filtered_df = df[df["test_name"] == test_name].sort_values(by="test_date", ascending=False)
+                filtered_df["test_date"] = pd.to_datetime(filtered_df["test_date"], dayfirst=True, errors="coerce")
+                filtered_df = filtered_df.sort_values(by="test_date", ascending=False)
+                filtered_df["test_date"] = filtered_df["test_date"].dt.strftime("%d/%m/%Y")
 
                 # Step 4: Configure AgGrid
                 gb = GridOptionsBuilder.from_dataframe(filtered_df)
