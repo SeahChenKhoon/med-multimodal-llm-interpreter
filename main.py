@@ -1,7 +1,9 @@
-import csv
+import streamlit as st
+from st_aggrid import AgGrid, GridOptionsBuilder
 import json
 import re
-import sqlite3
+import os
+import uuid
 from datetime import date, datetime
 from pathlib import Path
 
@@ -14,7 +16,55 @@ from src.utils.lab_results import LabResult, LabResultList
 from src.utils.llm_client import LLMClient
 from src.utils.settings import SETTINGS
 
+def set_dataframe_column_styles():
+    st.markdown("""
+    <style>
+    /* Date column */
+    .dataframe td:nth-child(1),
+    .dataframe th:nth-child(1) {
+        max-width: 30px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
 
+    /* Test Name */
+    .dataframe td:nth-child(2),
+    .dataframe th:nth-child(2) {
+        max-width: 80px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    /* Test Result */
+    .dataframe td:nth-child(3),
+    .dataframe th:nth-child(3) {
+        max-width: 30px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    /* Test Classification */
+    .dataframe td:nth-child(4),
+    .dataframe th:nth-child(4) {
+        max-width: 30px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+                
+    /* Recommendation */
+    .dataframe td:nth-child(5),
+    .dataframe th:nth-child(5) {
+        max-width: 300px;
+        white-space: normal;
+        word-wrap: break-word;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 def _extract_pdf_text(pdf_file_path: str) -> str:
     """
@@ -188,6 +238,20 @@ def _classify_and_parse_lab_results(
     return lab_results
 
 
+def save_uploaded_file(uploaded_file, save_dir: str) -> Path:
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    original_name = Path(uploaded_file.name).stem
+    extension = Path(uploaded_file.name).suffix
+    unique_id = datetime.now().strftime("%Y%m%d%H%M%S") + "_" + uuid.uuid4().hex[:6]
+    new_filename = f"{original_name}_{unique_id}{extension}"
+
+    file_path = save_dir / new_filename
+    with open(file_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    return file_path
+
+
 def main() -> None:
     """
     Main orchestration function for processing medical lab results.
@@ -205,9 +269,11 @@ def main() -> None:
         None
     """
     # Initialisation
+    st.set_page_config(page_title="Medical Multimodal LLM Interpreter", layout="wide")
     settings_dict = _build_settings_dict()
     config = config_loader.load_config(settings_dict["config_file_path"])    
     data_file = Path(config["path"]["data_file"])
+    processing_dir = Path(config["path"]["processing_dir"])
     sqllite_file = Path(config["sqllite"]["file"])
     table_name = config["sqllite"]["table_name"]
     lab_results = LabResultList()
@@ -217,33 +283,82 @@ def main() -> None:
     db_lab_results = LabResultList.read_lab_results_from_sqlite(
         sqllite_file, table_name)
     unique_name_pairs =db_lab_results.get_unique_test_names_str()
-
-    # Extract lab result from PDF
-    print(f"Processing file: {data_file.name}")
-    lab_result_dicts, test_date = _extract_lab_results_from_pdf(
-        data_file, settings_dict,
-        config["prompt"]["extract_and_classify_lab_tests_prompt_template"])
     
-    # Derive Investigation from LLM
-    lab_results= _classify_and_parse_lab_results(lab_result_dicts=lab_result_dicts, 
-                                    settings_dict=settings_dict,
-                                    prompt_template=lab_result_classification_prompt, 
-                                    data_file_name=data_file.name, test_date=test_date)
-    
-    # Update Standard Name
-    lab_results.standardize_test_names(
-            settings_dict=settings_dict, 
-            prompt_template=config["prompt"]["lab_test_name_grouping_prompt_template"],
-            unique_name_pairs=unique_name_pairs)
+    st.title("🩺 Medical Multimodal LLM Interpreter")
+    uploaded_files = st.file_uploader("Upload PDF file(s)", type=["pdf"], accept_multiple_files=True)
+    if uploaded_files:
+        if st.button("🔄 Process Uploaded Files"):
+        
+            for uploaded_file in uploaded_files:
+                full_path_str = str(processing_dir / uploaded_file.name)
+                data_file = save_uploaded_file(uploaded_file, processing_dir)
 
-    # Output result 
-    lab_results.export_lab_results_to_sqlite(sqllite_file, table_name)
+                # Extract lab result from PDF
+                st.write(f"Processing file: {uploaded_file.name}")
+                lab_result_dicts, test_date = _extract_lab_results_from_pdf(
+                    data_file, settings_dict,
+                    config["prompt"]["extract_and_classify_lab_tests_prompt_template"])
+                
+                # Derive Investigation from LLM
+                lab_results= _classify_and_parse_lab_results(lab_result_dicts=lab_result_dicts, 
+                                                settings_dict=settings_dict,
+                                                prompt_template=lab_result_classification_prompt, 
+                                                data_file_name=full_path_str, test_date=test_date,
+                                                )
+                
+                # Update Standard Name
+                lab_results.standardize_test_names(
+                        settings_dict=settings_dict, 
+                        prompt_template=config["prompt"]["lab_test_name_grouping_prompt_template"],
+                        unique_name_pairs=unique_name_pairs)
 
-    # Retrive and output table rows
-    lab_results = LabResultList.read_lab_results_from_sqlite(sqllite_file, table_name)
-    print(lab_results.describe())
-    lab_results.export_to_csv(config["path"]["csv_file"])
+                # Output result 
+                lab_results.export_lab_results_to_sqlite(sqllite_file, table_name)
 
+                if data_file.exists():
+                    data_file.unlink()
+
+            # Retrive and output table rows
+            lab_results = LabResultList.read_lab_results_from_sqlite(sqllite_file, table_name)
+            lab_results.export_to_csv(config["path"]["csv_file"])
+
+            df = lab_results.lab_results_to_dataframe()
+            
+            gb = GridOptionsBuilder.from_dataframe(df)
+            gb.configure_column("test_date", width=80)
+            gb.configure_column("test_name", width=200)
+            gb.configure_column("test_result", width=50)
+            gb.configure_column("classification", width=70)
+            gb.configure_column("recommendation", width=1000, wrapText=True, autoHeight=True)
+            grid_options = gb.build()
+
+            AgGrid(df, gridOptions=grid_options, fit_columns_on_grid_load=True)
+
+            # Filter rows with non-empty recommendations
+            recommended_df = df[df["recommendation"].notna() & (df["recommendation"].str.strip() != "")]
+
+            # Extract test names
+            test_name_list = recommended_df["test_name"].unique().tolist()
+            # Display
+            st.subheader("🩺 Tests with Recommendations")
+            
+            for test_name in test_name_list:
+                st.markdown(f"### 🧪 Test: {test_name}")
+
+                # Step 3: Filter original df for all records of this test_name
+                filtered_df = df[df["test_name"] == test_name].sort_values(by="test_date", ascending=False)
+
+                # Step 4: Configure AgGrid
+                gb = GridOptionsBuilder.from_dataframe(filtered_df)
+                gb.configure_column("test_date", width=80)
+                gb.configure_column("test_name", width=200)
+                gb.configure_column("test_result", width=100)
+                gb.configure_column("classification", width=100)
+                gb.configure_column("recommendation", width=800, wrapText=True, autoHeight=True)
+                grid_options = gb.build()
+
+                # Step 5: Display the data
+                AgGrid(filtered_df, gridOptions=grid_options, fit_columns_on_grid_load=True)
 
 if __name__ == "__main__":
     main()
