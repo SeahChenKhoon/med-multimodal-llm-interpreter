@@ -238,12 +238,11 @@ def main() -> None:
 
     # Output result 
     lab_results.export_lab_results_to_sqlite(sqllite_file, table_name)
-    lab_results.export_to_csv(config["path"]["csv_file"])
-    
 
     # Retrive and output table rows
     lab_results = LabResultList.read_lab_results_from_sqlite(sqllite_file, table_name)
     print(lab_results.describe())
+    lab_results.export_to_csv(config["path"]["csv_file"])
 
 
 if __name__ == "__main__":
