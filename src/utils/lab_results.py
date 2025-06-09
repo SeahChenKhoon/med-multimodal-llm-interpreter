@@ -1,4 +1,7 @@
 import json
+import os
+import sqlite3
+import pandas as pd
 from datetime import date, datetime
 from typing import Optional, List, Dict, Set, Tuple
 
@@ -178,4 +181,122 @@ class LabResultList:
             self.apply_standardization(correction_dict)
         except (json.JSONDecodeError, KeyError) as e:
             raise ValueError(f"Standardization failed: {e}")
-        
+
+
+    def export_to_csv(self, output_path: str) -> None:
+        """
+        Appends lab results to a CSV file.
+
+        Args:
+            output_path (str): Path to the CSV file to append or create.
+        """
+        rows = [
+            {
+                "filename": result.test_filename,
+                "test_date": result.test_date,
+                "test_common_name": result.test_common_name,
+                "test_name": result.test_name,
+                "test_result": result.test_result,
+                "test_uom": result.test_uom,
+                "classification": result.classification,
+                "reason": result.reason,
+                "recommendation": result.recommendation
+            }
+            for result in self.result
+        ]
+        df = pd.DataFrame(rows)
+        file_exists = os.path.exists(output_path)
+        df.to_csv(output_path, mode='a', index=False, header=not file_exists)
+
+
+    def read_lab_results_from_sqlite(db_path: str, table_name: str) -> "LabResultList":
+        lab_result_list = LabResultList()
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # Check if the table exists
+        cursor.execute("""
+            SELECT name FROM sqlite_master WHERE type='table' AND name=?
+        """, (table_name,))
+        if cursor.fetchone() is None:
+            conn.close()
+            return []
+
+        # Fetch rows
+        cursor.execute(f"""
+            SELECT filename, test_date, test_common_name, test_name, test_result, test_uom,
+                classification, reason, recommendation
+            FROM {table_name}
+        """)
+        rows = cursor.fetchall()
+
+        lab_result_list.result = [
+            LabResult(
+                test_filename=row[0],
+                test_date=row[1],
+                test_common_name=row[2],
+                test_name=row[3],
+                test_result=row[4],
+                test_uom=row[5],
+                classification=row[6],
+                reason=row[7],
+                recommendation=row[8]  
+            )
+            for row in rows
+        ]
+        conn.close()
+        return lab_result_list
+
+
+    def export_lab_results_to_sqlite(
+        self,
+        db_path: str,
+        table_name: str = "lab_results"
+    ) -> None:
+        """
+        Export a list of cls_Lab_Result objects to a SQLite database table.
+
+        Args:
+            lab_results (List[cls_Lab_Result]): List of results to export.
+            db_path (str): Path to the SQLite database file.
+            table_name (str): Name of the table to write to.
+        """
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # Create table if not exists
+        cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS {table_name} (
+                filename TEXT,
+                test_date TEXT,
+                test_common_name TEXT,
+                test_name TEXT,
+                test_result TEXT,
+                test_uom TEXT,
+                classification TEXT,
+                reason TEXT,
+                recommendation TEXT,
+                PRIMARY KEY (test_date, test_name)
+            )
+        """)
+
+        # Insert rows
+        for result in self.result:
+            cursor.execute(f"""
+                INSERT OR IGNORE INTO {table_name} (
+                    filename, test_date, test_common_name, test_name, test_result, test_uom, classification, reason, recommendation
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                result.test_filename,
+                result.test_date.isoformat() if hasattr(result.test_date, 'isoformat') else result.test_date,
+                result.test_common_name,
+                result.test_name,
+                result.test_result,
+                result.test_uom,
+                result.classification,
+                result.reason,
+                result.recommendation 
+            ))
+
+        conn.commit()
+        conn.close()
