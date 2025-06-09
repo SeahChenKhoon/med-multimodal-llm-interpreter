@@ -1,7 +1,7 @@
 
 path:
   data_file: ".\\data\\selected_data\\Lab_Test_Results_030625(5)_1.pdf"
-  csv_file: ".\\data\\selected_data\\Lab_Test_Results.csv"
+  csv_file: ".\\data\\output\\Lab_Test_Results.csv"
 
 sqllite:
   file: ".\\data\\output\\med_multi_modal.db"
