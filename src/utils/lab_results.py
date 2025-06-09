@@ -4,6 +4,7 @@ import sqlite3
 import pandas as pd
 from datetime import date, datetime
 from typing import Optional, List, Dict, Set, Tuple
+import src.utils.config_loader as util
 
 from src.utils.llm_client import LLMClient
 
@@ -206,7 +207,7 @@ class LabResultList:
         ]
         df = pd.DataFrame(rows)
         file_exists = os.path.exists(output_path)
-        df.to_csv(output_path, mode='a', index=False, header=not file_exists)
+        df.to_csv(output_path, index=False,  header=True)
 
 
     def read_lab_results_from_sqlite(db_path: str, table_name: str) -> "LabResultList":
@@ -310,3 +311,24 @@ class LabResultList:
 
         conn.commit()
         conn.close()
+
+
+    def lab_results_to_dataframe(self) -> pd.DataFrame:
+        rows = [
+            {
+                "test_date": util.format_test_date(result.test_date),
+                "test_common_name": result.test_common_name,
+                "test_result": f"{result.test_result or ''} {result.test_uom or ''}".strip(),
+                "classification": result.classification,
+                "recommendation": result.recommendation
+            }
+            for result in self.result
+        ]
+        df = pd.DataFrame(rows)
+        df = df.reset_index(drop=True)
+        df = df.rename(columns={"test_common_name": "test_name"})
+        df["test_date"] = pd.to_datetime(df["test_date"], dayfirst=True, errors="coerce")
+        df["test_date"] = df["test_date"].dt.strftime("%d/%m/%Y")
+        df.sort_values(by="test_date", inplace=True)
+        return df 
+
