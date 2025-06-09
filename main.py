@@ -1,3 +1,5 @@
+# PYTHONPATH=. poetry run streamlit run main.py
+
 import streamlit as st
 from st_aggrid import AgGrid, GridOptionsBuilder
 import json
