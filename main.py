@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from pypdf import PdfReader
 
 import src.utils.config_loader as config_loader
-import src.utils.lab_result_repository as sqlite3_lib
 from src.utils.lab_results import LabResult, LabResultList
 from src.utils.llm_client import LLMClient
 from src.utils.settings import SETTINGS
@@ -215,7 +214,7 @@ def main() -> None:
     lab_result_classification_prompt=config["prompt"]["lab_result_classification_prompt"]
 
     # Read previous lab result from SQLLite
-    db_lab_results = sqlite3_lib.read_lab_results_from_sqlite(
+    db_lab_results = LabResultList.read_lab_results_from_sqlite(
         sqllite_file, table_name)
     unique_name_pairs =db_lab_results.get_unique_test_names_str()
 
@@ -237,11 +236,13 @@ def main() -> None:
             prompt_template=config["prompt"]["lab_test_name_grouping_prompt_template"],
             unique_name_pairs=unique_name_pairs)
 
-    # Update to  sqllite
-    sqlite3_lib.export_lab_results_to_sqlite(lab_results.result, sqllite_file, table_name)
+    # Output result 
+    lab_results.export_lab_results_to_sqlite(sqllite_file, table_name)
+    lab_results.export_to_csv(config["path"]["csv_file"])
+    
 
     # Retrive and output table rows
-    lab_results = sqlite3_lib.read_lab_results_from_sqlite(sqllite_file, table_name)
+    lab_results = LabResultList.read_lab_results_from_sqlite(sqllite_file, table_name)
     print(lab_results.describe())
 
 
