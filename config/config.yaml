@@ -9,6 +9,20 @@ sqllite:
   file: ".\\data\\output\\med_multi_modal.db"
   table_name: "lab_results"
 
+aggrid_column_config:
+  test_date:
+    width: 80
+  test_name:
+    width: 200
+  test_result:
+    width: 50
+  classification:
+    width: 70
+  recommendation:
+    width: 1000
+    wrapText: true
+    autoHeight: true
+    
 prompt:
   extract_and_classify_lab_tests_prompt_template :
     '
