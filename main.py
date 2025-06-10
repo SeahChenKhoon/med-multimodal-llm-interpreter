@@ -300,7 +300,16 @@ def display_recommended_tests(df: pd.DataFrame, config: Dict) -> None:
         None
     """
     recommended_df = df[df["recommendation"].notna() & (df["recommendation"].str.strip() != "")]
-    test_name_list = recommended_df["test_name"].unique().tolist()
+    test_name_list = test_name_list = (
+        recommended_df["test_name"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .replace("", pd.NA)
+        .dropna()
+        .unique()
+        .tolist()
+    )
 
     if not test_name_list:
         st.info("✅ No recommendations found in the lab results.")
