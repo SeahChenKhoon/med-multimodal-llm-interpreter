@@ -320,6 +320,7 @@ class LabResultList:
                 "test_common_name": result.test_common_name,
                 "test_result": f"{result.test_result or ''} {result.test_uom or ''}".strip(),
                 "classification": result.classification,
+                "reason": result.reason,
                 "recommendation": result.recommendation
             }
             for result in self.result
