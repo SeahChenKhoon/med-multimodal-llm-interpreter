@@ -11,18 +11,22 @@ sqllite:
 
 aggrid_column_config:
   test_date:
-    width: 80
+    width: 100
   test_name:
     width: 200
   test_result:
-    width: 50
+    width: 200
   classification:
-    width: 70
-  recommendation:
-    width: 1000
+    width: 120
+  reason:
+    width: 500
     wrapText: true
     autoHeight: true
-    
+  recommendation:
+    width: 500
+    wrapText: true
+    autoHeight: true
+
 prompt:
   extract_and_classify_lab_tests_prompt_template :
     '
