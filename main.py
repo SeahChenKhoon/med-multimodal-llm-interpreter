@@ -255,6 +255,104 @@ def save_uploaded_file(uploaded_file, save_dir: str) -> Path:
     return file_path
 
 
+def build_grid_options_from_yaml_config(df: pd.DataFrame, config: Dict[str, Dict]) -> Dict:
+    """
+    Build Streamlit AgGrid grid options from a YAML-based configuration.
+
+    Args:
+        df (pd.DataFrame): The DataFrame to display.
+        config (Dict[str, Dict]): The YAML config dictionary including `aggrid_column_config`.
+
+    Returns:
+        Dict: Grid options for use in AgGrid.
+    """
+    gb = GridOptionsBuilder.from_dataframe(df)
+    col_config = config.get("aggrid_column_config", {})
+
+    for col, settings in col_config.items():
+        gb.configure_column(
+            col,
+            width=settings.get("width"),
+            wrapText=settings.get("wrapText", False),
+            autoHeight=settings.get("autoHeight", False)
+        )
+
+    return gb.build()
+
+
+def display_lab_results_from_sqlite(df: pd.DataFrame,sqllite_file: str, table_name: str, config: Dict[str, Dict[str, str]]) -> None:
+    lab_results = LabResultList.read_lab_results_from_sqlite(sqllite_file, table_name)
+    lab_results.export_to_csv(config["path"]["csv_file"])
+
+    grid_options = build_grid_options_from_yaml_config(df, config)
+    AgGrid(df, gridOptions=grid_options, fit_columns_on_grid_load=True)
+
+
+def display_recommended_tests(df: pd.DataFrame, config: Dict) -> None:
+    """
+    Displays lab tests with non-empty recommendations grouped by test name.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing all lab test results.
+        config (Dict): App configuration containing AgGrid column settings under 'aggrid_column_config'.
+
+    Returns:
+        None
+    """
+    recommended_df = df[df["recommendation"].notna() & (df["recommendation"].str.strip() != "")]
+    test_name_list = recommended_df["test_name"].unique().tolist()
+
+    if not test_name_list:
+        st.info("✅ No recommendations found in the lab results.")
+        return
+
+    st.subheader("🩺 Tests with Recommendations")
+
+    for test_name in test_name_list:
+        st.markdown(f"### 🧪 Test: {test_name}")
+
+        filtered_df = df[df["test_name"] == test_name].copy()
+        filtered_df["test_date"] = pd.to_datetime(filtered_df["test_date"], dayfirst=True, errors="coerce")
+        filtered_df = filtered_df.sort_values(by="test_date", ascending=False)
+        filtered_df["test_date"] = filtered_df["test_date"].dt.strftime("%d/%m/%Y")
+
+        # Use shared grid option config
+        grid_options = build_grid_options_from_yaml_config(filtered_df, config)
+        AgGrid(filtered_df, gridOptions=grid_options, fit_columns_on_grid_load=True)
+
+def display_recommended_tests(df: pd.DataFrame, config: Dict) -> None:
+    """
+    Displays lab tests with non-empty recommendations grouped by test name.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing all lab test results.
+        config (Dict): App configuration containing AgGrid column settings under 'aggrid_column_config'.
+
+    Returns:
+        None
+    """
+    recommended_df = df[df["recommendation"].notna() & (df["recommendation"].str.strip() != "")]
+    test_name_list = recommended_df["test_name"].unique().tolist()
+
+    if not test_name_list:
+        st.info("✅ No recommendations found in the lab results.")
+        return
+
+    st.subheader("🩺 Tests with Recommendations")
+
+    for test_name in test_name_list:
+        st.markdown(f"### 🧪 Test: {test_name}")
+
+        filtered_df = df[df["test_name"] == test_name].copy()
+        filtered_df["test_date"] = pd.to_datetime(filtered_df["test_date"], dayfirst=True, errors="coerce")
+        filtered_df = filtered_df.sort_values(by="test_date", ascending=False)
+        filtered_df["test_date"] = filtered_df["test_date"].dt.strftime("%d/%m/%Y")
+
+        # Use shared grid option config
+        grid_options = build_grid_options_from_yaml_config(filtered_df, config)
+        AgGrid(filtered_df, gridOptions=grid_options, fit_columns_on_grid_load=True)
+
+
 def main() -> None:
     """
     Main orchestration function for processing medical lab results.
@@ -321,50 +419,15 @@ def main() -> None:
                 if data_file.exists():
                     data_file.unlink()
 
+
             # Retrive and output table rows
             lab_results = LabResultList.read_lab_results_from_sqlite(sqllite_file, table_name)
             lab_results.export_to_csv(config["path"]["csv_file"])
 
             df = lab_results.lab_results_to_dataframe()
+            display_lab_results_from_sqlite(df, sqllite_file, table_name, config)
             
-            gb = GridOptionsBuilder.from_dataframe(df)
-            gb.configure_column("test_date", width=80)
-            gb.configure_column("test_name", width=200)
-            gb.configure_column("test_result", width=50)
-            gb.configure_column("classification", width=70)
-            gb.configure_column("recommendation", width=1000, wrapText=True, autoHeight=True)
-            grid_options = gb.build()
-
-            AgGrid(df, gridOptions=grid_options, fit_columns_on_grid_load=True)
-
-            # Filter rows with non-empty recommendations
-            recommended_df = df[df["recommendation"].notna() & (df["recommendation"].str.strip() != "")]
-
-            # Extract test names
-            test_name_list = recommended_df["test_name"].unique().tolist()
-            # Display
-            st.subheader("🩺 Tests with Recommendations")
-            
-            for test_name in test_name_list:
-                st.markdown(f"### 🧪 Test: {test_name}")
-
-                # Step 3: Filter original df for all records of this test_name
-                filtered_df = df[df["test_name"] == test_name].sort_values(by="test_date", ascending=False)
-                filtered_df["test_date"] = pd.to_datetime(filtered_df["test_date"], dayfirst=True, errors="coerce")
-                filtered_df = filtered_df.sort_values(by="test_date", ascending=False)
-                filtered_df["test_date"] = filtered_df["test_date"].dt.strftime("%d/%m/%Y")
-
-                # Step 4: Configure AgGrid
-                gb = GridOptionsBuilder.from_dataframe(filtered_df)
-                gb.configure_column("test_date", width=80)
-                gb.configure_column("test_name", width=200)
-                gb.configure_column("test_result", width=100)
-                gb.configure_column("classification", width=100)
-                gb.configure_column("recommendation", width=800, wrapText=True, autoHeight=True)
-                grid_options = gb.build()
-
-                # Step 5: Display the data
-                AgGrid(filtered_df, gridOptions=grid_options, fit_columns_on_grid_load=True)
+            display_recommended_tests(df, config)
 
 if __name__ == "__main__":
     main()
