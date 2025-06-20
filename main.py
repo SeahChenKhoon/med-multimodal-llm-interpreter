@@ -5,6 +5,7 @@ from st_aggrid import AgGrid, GridOptionsBuilder
 import json
 import re
 import os
+import time
 import uuid
 from datetime import date, datetime
 from pathlib import Path
@@ -398,7 +399,10 @@ def main() -> None:
     uploaded_files = st.file_uploader("Upload PDF file(s)", type=["pdf"], accept_multiple_files=True)
     if uploaded_files:
         if st.button("🔄 Process Uploaded Files"):
-        
+            start_time = time.time()
+            start_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            st.info(f"⏳ Processing started at: {start_timestamp}")
+
             for uploaded_file in uploaded_files:
                 full_path_str = str(processing_dir / uploaded_file.name)
                 data_file = save_uploaded_file(uploaded_file, processing_dir)
@@ -435,8 +439,15 @@ def main() -> None:
 
             df = lab_results.lab_results_to_dataframe()
             display_lab_results_from_sqlite(df, sqllite_file, table_name, config)
-            
             display_recommended_tests(df, config)
+            
+            end_time = time.time()
+            end_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            duration_sec = end_time - start_time
+
+            st.success(f"✅ Processing completed at: {end_timestamp}")
+            st.write(f"🕒 Total duration: {duration_sec:.2f} seconds")
+                        
 
 if __name__ == "__main__":
     main()
