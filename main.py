@@ -440,14 +440,21 @@ def main() -> None:
             df = lab_results.lab_results_to_dataframe()
             display_lab_results_from_sqlite(df, sqllite_file, table_name, config)
             display_recommended_tests(df, config)
-            
+
             end_time = time.time()
             end_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             duration_sec = end_time - start_time
 
+
+            end_time = time.time()
+            end_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            duration_sec = end_time - start_time
+
+            minutes = int(duration_sec // 60)
+            seconds = round(duration_sec % 60, 2)
+
             st.success(f"✅ Processing completed at: {end_timestamp}")
-            st.write(f"🕒 Total duration: {duration_sec:.2f} seconds")
-                        
+            st.write(f"🕒 Total duration: {minutes} min {seconds} sec")
 
 if __name__ == "__main__":
     main()
